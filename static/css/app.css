@@ -1,9 +1,221 @@
 html, body {
   height: 100%;
   margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #1a1a1a;
 }
 
 #map {
   position: fixed;
   inset: 0;
+}
+
+.add-place-btn {
+  position: fixed;
+  z-index: 1000;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  width: 3.25rem;
+  height: 3.25rem;
+  border: none;
+  border-radius: 999px;
+  background: #1a1a1a;
+  color: #fff;
+  font-size: 1.75rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 0.4rem 1rem rgba(0, 0, 0, 0.2);
+}
+
+.add-place-btn:hover {
+  background: #333;
+}
+
+.add-place-btn[hidden] {
+  display: none;
+}
+
+.pick-hint {
+  position: fixed;
+  z-index: 1000;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 0.5rem 0.9rem;
+  border-radius: 999px;
+  background: rgba(26, 26, 26, 0.9);
+  color: #fff;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.place-form {
+  position: fixed;
+  z-index: 1100;
+  right: 1rem;
+  bottom: 1rem;
+  width: min(22rem, calc(100vw - 2rem));
+  padding: 1rem 1.15rem 1.15rem;
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.16);
+}
+
+.place-form__heading {
+  margin: 0 0 0.85rem;
+  font-size: 1.1rem;
+}
+
+.place-form__errors {
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.5rem;
+  background: #fdecec;
+  color: #8a1f1f;
+  font-size: 0.85rem;
+}
+
+.place-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: #555;
+}
+
+.place-form__field input,
+.place-form__field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #ddd;
+  border-radius: 0.5rem;
+  font: inherit;
+  color: #1a1a1a;
+  background: #fff;
+}
+
+.place-form__dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+.place-form__coords {
+  margin: 0 0 0.9rem;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.place-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.btn {
+  min-height: 2.4rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 0.55rem;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn--ghost {
+  background: transparent;
+  color: #444;
+}
+
+.btn--ghost:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.btn--primary {
+  background: #1a1a1a;
+  color: #fff;
+}
+
+.btn--primary:hover {
+  background: #333;
+}
+
+.place-popup {
+  min-width: 12rem;
+}
+
+.place-popup__title {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.place-popup__dates,
+.place-popup__description {
+  margin: 0 0 0.55rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.place-popup__dates {
+  color: #555;
+}
+
+.place-popup__description {
+  white-space: pre-wrap;
+}
+
+.place-popup__actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.place-popup__actions .btn {
+  min-height: 2.1rem;
+  font-size: 0.8rem;
+}
+
+.btn--danger {
+  background: #f6e4e4;
+  color: #8a1f1f;
+}
+
+.leaflet-popup.place-popup-wrap .leaflet-popup-content-wrapper {
+  border-radius: 0.85rem;
+  box-shadow: 0 0.45rem 1.3rem rgba(0, 0, 0, 0.18);
+  padding: 0;
+}
+
+.leaflet-popup.place-popup-wrap .leaflet-popup-content {
+  margin: 0.85rem 1rem 0.9rem;
+}
+
+.leaflet-popup.place-popup-wrap .leaflet-popup-tip {
+  box-shadow: none;
+}
+
+@media (max-width: 640px) {
+  .place-form {
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    border-radius: 1rem 1rem 0 0;
+    padding-bottom: calc(1.15rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .add-place-btn {
+    bottom: 1.5rem;
+    right: 1rem;
+  }
+
+  .pick-hint {
+    white-space: normal;
+    max-width: calc(100vw - 2rem);
+    text-align: center;
+  }
 }

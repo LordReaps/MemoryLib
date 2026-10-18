@@ -7,9 +7,55 @@
 
 {% block content %}
   <div id="map"></div>
+
+  <p id="pick-hint" class="pick-hint" hidden>Нажмите на карту, чтобы выбрать точку. Затем можно сдвинуть флажок.</p>
+
+  <button type="button" id="add-place-btn" class="add-place-btn" aria-label="Добавить место">+</button>
+
+  <form id="place-form" class="place-form" hidden>
+    {% csrf_token %}
+    <input type="hidden" name="latitude" id="id_latitude">
+    <input type="hidden" name="longitude" id="id_longitude">
+    <input type="hidden" name="place_id" id="id_place_id">
+
+    <h2 id="place-form-title" class="place-form__heading">Новое место</h2>
+    <p id="place-form-errors" class="place-form__errors" hidden></p>
+
+    <label class="place-form__field">
+      Название
+      <input type="text" name="title" id="id_title" maxlength="200" required autocomplete="off">
+    </label>
+
+    <label class="place-form__field">
+      Описание
+      <textarea name="description" id="id_description" rows="4" placeholder="Необязательно"></textarea>
+    </label>
+
+    <div class="place-form__dates">
+      <label class="place-form__field">
+        С
+        <input type="date" name="start_date" id="id_start_date">
+      </label>
+      <label class="place-form__field">
+        По
+        <input type="date" name="end_date" id="id_end_date">
+      </label>
+    </div>
+
+    <p id="place-coords" class="place-form__coords"></p>
+
+    <div class="place-form__actions">
+      <button type="button" id="place-form-cancel" class="btn btn--ghost">Отмена</button>
+      <button type="submit" class="btn btn--primary">Сохранить</button>
+    </div>
+  </form>
 {% endblock %}
 
 {% block scripts %}
+  {{ places_data|json_script:"places-data" }}
+  {{ create_url|json_script:"create-url" }}
+  {{ update_url_template|json_script:"update-url-template" }}
+  {{ delete_url_template|json_script:"delete-url-template" }}
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="{% static 'js/map.js' %}"></script>
 {% endblock %}
