@@ -8,6 +8,12 @@
   {% block head %}{% endblock %}
 </head>
 <body>
+  {% if request.session.authenticated %}
+  <form method="post" action="{% url 'logout' %}" class="logout-form">
+    {% csrf_token %}
+    <button type="submit" class="btn btn--ghost logout-btn">Выйти</button>
+  </form>
+  {% endif %}
   {% block content %}{% endblock %}
   {% block scripts %}{% endblock %}
 </body>

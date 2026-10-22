@@ -26,3 +26,9 @@ class PlaceForm(forms.ModelForm):
             "start_date": forms.DateInput(attrs={"type": "date"}),
             "end_date": forms.DateInput(attrs={"type": "date"}),
         }
+
+class LoginForm(forms.Form):
+    password = forms.CharField(
+        widget=forms.PasswordInput(attrs={"autofocus": True}),
+        label="Пароль",
+    )

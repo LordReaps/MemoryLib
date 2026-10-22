@@ -219,3 +219,97 @@ html, body {
     text-align: center;
   }
 }
+
+.leaflet-container .leaflet-control-attribution {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+.logout-form {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 1000;
+  margin: 0;
+}
+
+.logout-btn {
+  padding: 6px 12px;
+  font-size: 14px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.logout-btn:hover {
+  background: #f5f5f5;
+}
+
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #f7f7f5;
+}
+
+.login-form {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-title {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.login-form input[type="password"] {
+  padding: 12px 14px;
+  font-size: 16px; /* 16px — чтобы iOS не зумил при фокусе */
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.login-form input[type="password"]:focus {
+  outline: none;
+  border-color: #999;
+}
+
+.login-submit {
+  padding: 12px 14px;
+  font-size: 16px;
+  background: #222;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.login-submit:hover {
+  background: #000;
+}
+
+.login-error {
+  padding: 10px 12px;
+  font-size: 14px;
+  color: #a11;
+  background: #fee;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.custom-red-marker {
+  background: #0074ad;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}

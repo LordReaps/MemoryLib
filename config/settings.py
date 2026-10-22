@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,6 +21,15 @@ SECRET_KEY = os.environ["SECRET_KEY"]  # без значения по умолч
 DEBUG = env_bool("DEBUG", False)
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "127.0.0.1,localhost")
 
+SITE_PASSWORD = os.getenv("SITE_PASSWORD")
+if not SITE_PASSWORD:
+    raise ImproperlyConfigured(
+        "SITE_PASSWORD не задан."
+    )
+
+# Флаг для production: включает Secure-флаги cookie (требует HTTPS).
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -38,6 +48,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "places.middleware.SitePasswordMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -91,3 +102,12 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# --- Сессии и cookie ---
+SESSION_COOKIE_SECURE = COOKIE_SECURE
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+
+CSRF_COOKIE_SECURE = COOKIE_SECURE
+
+LOGIN_ATTEMPT_LIMIT = int(os.getenv("LOGIN_ATTEMPT_LIMIT", "5"))
+LOGIN_ATTEMPT_WINDOW_SECONDS = int(os.getenv("LOGIN_ATTEMPT_WINDOW_SECONDS", "900"))

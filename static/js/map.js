@@ -23,10 +23,27 @@
   const coordsLabel = document.getElementById("place-coords");
   const cancelButton = document.getElementById("place-form-cancel");
 
-  const map = L.map("map", { zoomControl: true }).setView([50.0, 10.0], 4);
+  delete L.Icon.Default.prototype._getIconUrl;
+
+  L.Icon.Default.mergeOptions({
+    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  });
+
+  const map = L.map("map", {
+    zoomControl: true,
+    minZoom: 2,
+    maxBounds: [[-90, -180], [90, 180]], // ограничивает перемещение границами мира
+    maxBoundsViscosity: 1.0 // не даёт «выпрыгнуть» за границы
+    }).setView([50.0, 10.0], 4);
+
+  map.attributionControl.remove();
 
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
+    minZoom: 2,
+    noWrap: true,
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   }).addTo(map);
@@ -41,6 +58,12 @@
     day: "numeric",
     month: "long",
     year: "numeric",
+  });
+
+  const redIcon = L.divIcon({
+    className: "custom-red-marker",
+    iconSize: [24, 24],
+    iconAnchor: [12, 12]
   });
 
   function formatDate(isoDate) {
@@ -156,8 +179,10 @@
 
   function addPlaceMarker(place, openPopup) {
     const marker = L.marker([place.latitude, place.longitude], {
-      draggable: false,
+    draggable: false,
+    icon: redIcon // <-- добавляем иконку
     }).addTo(map);
+
     marker.placeData = place;
     bindPopup(marker, place);
     marker.on("click", function (event) {
@@ -198,7 +223,7 @@
 
   function placePreviewAt(latlng) {
     if (!previewMarker) {
-      previewMarker = L.marker(latlng, { draggable: true }).addTo(map);
+      previewMarker = L.marker(latlng, { draggable: true, icon: redIcon }).addTo(map);
       previewMarker.on("dragend", function () {
         const position = previewMarker.getLatLng();
         setCoords(position.lat, position.lng);
