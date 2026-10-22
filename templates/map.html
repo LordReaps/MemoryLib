@@ -40,6 +40,10 @@
         По
         <input type="date" name="end_date" id="id_end_date">
       </label>
+      <label class="place-form__field">Фотографии
+        <input type="file" name="photos" id="id_photos" multiple accept="image/*">
+      </label>
+      <div id="photo-preview" class="photo-preview"></div>
     </div>
 
     <p id="place-coords" class="place-form__coords"></p>
@@ -49,6 +53,13 @@
       <button type="submit" class="btn btn--primary">Сохранить</button>
     </div>
   </form>
+
+  <!-- Контейнер для лайтбокса (скрыт по умолчанию) -->
+  <div id="lightbox" class="lightbox" hidden>
+    <button type="button" class="lightbox__close" id="lightbox-close">&times;</button>
+    <img id="lightbox-img" class="lightbox__img" src="" alt="Просмотр фото">
+  </div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -56,6 +67,7 @@
   {{ create_url|json_script:"create-url" }}
   {{ update_url_template|json_script:"update-url-template" }}
   {{ delete_url_template|json_script:"delete-url-template" }}
+{{ delete_photo_url_template|json_script:"delete-photo-url-template" }}
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="{% static 'js/map.js' %}"></script>
 {% endblock %}

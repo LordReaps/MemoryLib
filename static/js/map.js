@@ -23,6 +23,8 @@
   const coordsLabel = document.getElementById("place-coords");
   const cancelButton = document.getElementById("place-form-cancel");
 
+  const deletePhotoUrlTemplate = JSON.parse(document.getElementById("delete-photo-url-template").textContent);
+
   delete L.Icon.Default.prototype._getIconUrl;
 
   L.Icon.Default.mergeOptions({
@@ -140,6 +142,31 @@
       descriptionEl.className = "place-popup__description";
       descriptionEl.textContent = description;
       wrap.appendChild(descriptionEl);
+    }
+
+    if (place.photos && place.photos.length > 0) {
+      const gallery = document.createElement("div");
+      gallery.className = "place-popup__gallery";
+
+      place.photos.forEach(function(photo) {
+        const imgWrap = document.createElement("div");
+        imgWrap.className = "place-popup__thumb-wrap";
+
+        const img = document.createElement("img");
+        img.src = photo.thumb_url || photo.original_url;
+        img.className = "place-popup__thumb";
+
+        img.addEventListener("click", function() {
+          const lb = document.getElementById("lightbox");
+          document.getElementById("lightbox-img").src = photo.original_url;
+          lb.hidden = false;
+        });
+
+        imgWrap.appendChild(img);
+        gallery.appendChild(imgWrap);
+      });
+
+      wrap.appendChild(gallery);
     }
 
     const actions = document.createElement("div");
@@ -295,6 +322,8 @@
     endDateInput.value = place.end_date || "";
     setCoords(place.latitude, place.longitude);
 
+    renderPreviews(place.photos);
+
     marker.off("dragend");
     marker.dragging.enable();
     marker.on("dragend", function () {
@@ -384,6 +413,112 @@
       "Нажмите на карту, чтобы выбрать точку. Затем можно сдвинуть флажок.";
   });
 
+    const photosInput = document.getElementById("id_photos");
+  const photoPreview = document.getElementById("photo-preview");
+  let previewUrls = [];
+  let selectedFiles = new DataTransfer(); // Файлы, которые ждут отправки
+
+  // Функция отрисовки одного превью с крестиком
+  function createPreviewItem(src, onRemove) {
+    const wrap = document.createElement("div");
+    wrap.className = "photo-preview__wrap";
+
+    const img = document.createElement("img");
+    img.src = src;
+    img.className = "photo-preview__img";
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "photo-preview__del";
+    delBtn.innerHTML = "&times;";
+    delBtn.addEventListener("click", onRemove);
+
+    wrap.appendChild(img);
+    wrap.appendChild(delBtn);
+    return wrap;
+  }
+
+  function renderPreviews(existingPhotos) {
+    clearPreviews();
+
+    // 1. Рисуем фото из базы (при редактировании)
+    if (existingPhotos) {
+      existingPhotos.forEach(function(photo) {
+        const item = createPreviewItem(photo.thumb_url || photo.original_url, function() {
+          // Сценарий 2: Удаление сохраненного фото
+          if (!confirm("Удалить это фото из базы?")) return;
+
+          fetch(urlFor(deletePhotoUrlTemplate, photo.id), {
+            method: "POST",
+            headers: {
+              "X-CSRFToken": form.querySelector("[name=csrfmiddlewaretoken]").value
+            }
+          }).then(r => r.json()).then(data => {
+            if (data.ok) {
+              // Удаляем из памяти текущего места, чтобы при сохранении формы оно не вернулось
+              const marker = markers.get(data.place_id);
+              if (marker && marker.placeData && marker.placeData.photos) {
+                marker.placeData.photos = marker.placeData.photos.filter(p => p.id !== photo.id);
+              }
+              // Перерисовываем превью заново
+              renderPreviews(marker ? marker.placeData.photos : []);
+            }
+          });
+        });
+        photoPreview.appendChild(item);
+      });
+    }
+
+    // 2. Рисуем только что выбранные файлы
+    Array.from(selectedFiles.files).forEach(function(file, index) {
+      const url = URL.createObjectURL(file);
+      previewUrls.push(url);
+
+      const item = createPreviewItem(url, function() {
+        // Сценарий 1: Удаление только что прикрепленного файла
+        const newTransfer = new DataTransfer();
+        // Копируем все файлы, КРОМЕ удаляемого
+        Array.from(selectedFiles.files).forEach((f, i) => {
+          if (i !== index) newTransfer.items.add(f);
+        });
+        selectedFiles = newTransfer;
+        photosInput.files = selectedFiles.files; // Обновляем инпут для формы
+        URL.revokeObjectURL(url); // Освобождаем память
+
+        // Перерисовываем
+        const currentPlace = placeIdInput.value ? markers.get(Number(placeIdInput.value)).placeData : null;
+        renderPreviews(currentPlace ? currentPlace.photos : null);
+      });
+
+      photoPreview.appendChild(item);
+    });
+  }
+
+  function clearPreviews() {
+    previewUrls.forEach(function(url) { URL.revokeObjectURL(url); });
+    previewUrls = [];
+    photoPreview.innerHTML = "";
+  }
+
+  // Слушаем выбор новых файлов
+  photosInput.addEventListener("change", function (e) {
+    for (let i = 0; i < e.target.files.length; i++) {
+      selectedFiles.items.add(e.target.files[i]);
+    }
+    photosInput.files = selectedFiles.files;
+    const currentPlace = placeIdInput.value ? markers.get(Number(placeIdInput.value)).placeData : null;
+    renderPreviews(currentPlace ? currentPlace.photos : null);
+  });
+
+  // Переопределяем resetForm
+  const originalResetForm = resetForm;
+  resetForm = function() {
+    originalResetForm();
+    selectedFiles = new DataTransfer();
+    photosInput.value = "";
+    clearPreviews();
+  };
+
   form.addEventListener("submit", function (event) {
     event.preventDefault();
     clearErrors();
@@ -422,6 +557,23 @@
       .catch(function () {
         showErrors({ __all__: [{ message: "Не удалось сохранить место" }] });
       });
+  });
+
+  // Логика закрытия лайтбокса
+  const lightbox = document.getElementById("lightbox");
+  const lightboxClose = document.getElementById("lightbox-close");
+
+  function closeLightbox() {
+    lightbox.hidden = true;
+    document.getElementById("lightbox-img").src = ""; // Очищаем, чтобы не грузить впустую
+  }
+
+  lightboxClose.addEventListener("click", closeLightbox);
+  lightbox.addEventListener("click", function (e) {
+    // Закрываем, если кликнули по фону, а не по самому фото
+    if (e.target === lightbox) {
+      closeLightbox();
+    }
   });
 
   places.forEach(function (place) {

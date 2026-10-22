@@ -1,4 +1,4 @@
-from django.http import JsonResponse
+from django.http import JsonResponse, Http404, FileResponse
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -6,8 +6,8 @@ from django.views.decorators.http import require_POST
 
 from . import auth
 from .forms import PlaceForm, LoginForm
-from .models import Place
-from .services import create_place, delete_place, serialize_place, update_place
+from .models import Place, Photo
+from .services import create_place, delete_place, serialize_place, update_place, add_photos_to_place, delete_photo_files
 
 
 def _place_url_template(name):
@@ -24,6 +24,7 @@ def map_view(request):
             "create_url": reverse("places:place_create"),
             "update_url_template": _place_url_template("place_update"),
             "delete_url_template": _place_url_template("place_delete"),
+            "delete_photo_url_template": reverse("places:photo_delete", kwargs={"pk": 0}).replace("/0/", "/{pk}/"),
         },
     )
 
@@ -34,10 +35,19 @@ def _json_errors(form):
 
 @require_POST
 def place_create(request):
+    print("=== FILES ===", request.FILES)
     form = PlaceForm(request.POST)
     if not form.is_valid():
         return _json_errors(form)
+
+    # Создаем место
     place = create_place(**form.cleaned_data)
+
+    # Сохраняем фото (если они были загружены)
+    files = request.FILES.getlist("photos")
+    if files:
+        add_photos_to_place(place.id, files)
+
     return JsonResponse({"ok": True, "place": serialize_place(place)})
 
 
@@ -47,7 +57,14 @@ def place_update(request, pk):
     form = PlaceForm(request.POST, instance=place)
     if not form.is_valid():
         return _json_errors(form)
+
     place = update_place(place, **form.cleaned_data)
+
+    # Добавляем новые фото (старые не трогаем)
+    files = request.FILES.getlist("photos")
+    if files:
+        add_photos_to_place(place.id, files)
+
     return JsonResponse({"ok": True, "place": serialize_place(place)})
 
 
@@ -56,6 +73,37 @@ def place_delete(request, pk):
     place = get_object_or_404(Place, pk=pk)
     delete_place(place)
     return JsonResponse({"ok": True, "id": pk})
+
+
+def serve_photo(request, pk, file_type):
+    if not request.session.get("authenticated"):
+        raise Http404
+
+    try:
+        photo = Photo.objects.get(pk=pk)
+    except Photo.DoesNotExist:
+        raise Http404
+
+    if file_type == "original":
+        file_field = photo.image
+    elif file_type == "thumb":
+        file_field = photo.thumbnail
+    else:
+        raise Http404
+
+    if not file_field:
+        raise Http404
+
+    # Используем FileResponse для отдачи файла
+    return FileResponse(file_field.open('rb'), content_type=photo.mime_type or 'application/octet-stream')
+
+@require_POST
+def photo_delete(request, pk):
+    photo = get_object_or_404(Photo, pk=pk)
+    place_id = photo.place.id
+    delete_photo_files(photo) # импортировать из services
+    photo.delete()
+    return JsonResponse({"ok": True, "place_id": place_id})
 
 
 def login_view(request):
