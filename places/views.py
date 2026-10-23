@@ -1,5 +1,3 @@
-from mimetypes import guess_type
-
 from django.http import JsonResponse, Http404, FileResponse
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse
@@ -9,7 +7,15 @@ from django.views.decorators.http import require_POST
 from . import auth
 from .forms import PlaceForm, LoginForm
 from .models import Place, Photo
-from .services import create_place, delete_photo, delete_place, serialize_place, update_place, add_photos_to_place
+from .services import (
+    ServiceOperationError,
+    create_place,
+    delete_photo,
+    delete_place,
+    serialize_place,
+    update_place,
+    add_photos_to_place,
+)
 
 
 def _place_url_template(name):
@@ -17,7 +23,7 @@ def _place_url_template(name):
 
 
 def map_view(request):
-    places_data = [serialize_place(place) for place in Place.objects.prefetch_related("photos")]
+    places_data = [serialize_place(place) for place in Place.objects.all()]
     return render(
         request,
         "map.html",
@@ -35,19 +41,23 @@ def _json_errors(form):
     return JsonResponse({"ok": False, "errors": form.errors.get_json_data()}, status=400)
 
 
+def _json_service_error(exc, status=400):
+    return JsonResponse({"ok": False, "error": str(exc)}, status=status)
+
+
 @require_POST
 def place_create(request):
     form = PlaceForm(request.POST)
     if not form.is_valid():
         return _json_errors(form)
 
-    # Создаем место
-    place = create_place(**form.cleaned_data)
-
-    # Сохраняем фото (если они были загружены)
-    files = request.FILES.getlist("photos")
-    if files:
-        add_photos_to_place(place.id, files)
+    try:
+        place = create_place(
+            files=request.FILES.getlist("photos"),
+            **form.cleaned_data,
+        )
+    except ServiceOperationError as exc:
+        return _json_service_error(exc, 500)
 
     return JsonResponse({"ok": True, "place": serialize_place(place)})
 
@@ -59,12 +69,14 @@ def place_update(request, pk):
     if not form.is_valid():
         return _json_errors(form)
 
-    place = update_place(place, **form.cleaned_data)
-
-    # Добавляем новые фото (старые не трогаем)
-    files = request.FILES.getlist("photos")
-    if files:
-        add_photos_to_place(place.id, files)
+    try:
+        place = update_place(
+            place,
+            files=request.FILES.getlist("photos"),
+            **form.cleaned_data,
+        )
+    except ServiceOperationError as exc:
+        return _json_service_error(exc, 500)
 
     return JsonResponse({"ok": True, "place": serialize_place(place)})
 
@@ -72,7 +84,10 @@ def place_update(request, pk):
 @require_POST
 def place_delete(request, pk):
     place = get_object_or_404(Place, pk=pk)
-    delete_place(place)
+    try:
+        delete_place(place)
+    except ServiceOperationError as exc:
+        return _json_service_error(exc, 500)
     return JsonResponse({"ok": True, "id": pk})
 
 
@@ -95,24 +110,18 @@ def serve_photo(request, pk, file_type):
     if not file_field:
         raise Http404
 
-    try:
-        file_handle = file_field.open("rb")
-    except (FileNotFoundError, OSError):
-        raise Http404
+    # Используем FileResponse для отдачи файла
+    return FileResponse(file_field.open("rb"), content_type=photo.mime_type or "application/octet-stream")
 
-    content_type, _ = guess_type(file_field.name)
-    if not content_type:
-        content_type = "image/webp" if file_type == "thumb" else "image/jpeg"
-
-    response = FileResponse(file_handle, content_type=content_type)
-    response["X-Content-Type-Options"] = "nosniff"
-    return response
 
 @require_POST
 def photo_delete(request, pk):
     photo = get_object_or_404(Photo, pk=pk)
     place_id = photo.place.id
-    delete_photo(photo)
+    try:
+        delete_photo(photo)
+    except ServiceOperationError as exc:
+        return _json_service_error(exc, 500)
     return JsonResponse({"ok": True, "place_id": place_id})
 
 
@@ -149,3 +158,4 @@ def login_view(request):
 def logout_view(request):
     request.session.flush()
     return redirect("login")
+

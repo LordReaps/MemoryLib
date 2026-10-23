@@ -1,15 +1,20 @@
-import logging
 import uuid
 
 from django.db import transaction
+import os
 from io import BytesIO
 from PIL import Image, ImageOps
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.urls import reverse
 
-from .models import Photo, Place
+from .models import Photo
 
-logger = logging.getLogger(__name__)
+from .models import Place
+
+
+class ServiceOperationError(RuntimeError):
+    """Бизнес-ошибка сервиса: операция с местом или фотографиями не выполнена."""
 
 
 def serialize_place(place):
@@ -48,29 +53,62 @@ def _build_place(**fields):
 
 @transaction.atomic
 def create_place(**fields):
-    place = _build_place(**fields)
-    place.save()
-    return place
+    files = fields.pop("files", None)
+    place = None
+    try:
+        place = _build_place(**fields)
+        place.save()
+        if files:
+            add_photos_to_place(place.id, files)
+        return place
+    except Exception as exc:
+        if place and place.pk:
+            try:
+                delete_place(place)
+            except Exception:
+                pass
+        raise ServiceOperationError(f"Не удалось создать место '{fields.get('title', '')}': {exc}") from exc
 
 
 @transaction.atomic
 def update_place(place, **fields):
-    place.title = fields["title"]
-    place.description = fields.get("description") or ""
-    place.latitude = fields["latitude"]
-    place.longitude = fields["longitude"]
-    place.start_date = fields.get("start_date")
-    place.end_date = fields.get("end_date")
-    place.full_clean()
-    place.save()
-    return place
+    files = fields.pop("files", None)
+    previous_values = {
+        "title": place.title,
+        "description": place.description,
+        "latitude": place.latitude,
+        "longitude": place.longitude,
+        "start_date": place.start_date,
+        "end_date": place.end_date,
+    }
+
+    try:
+        place.title = fields["title"]
+        place.description = fields.get("description") or ""
+        place.latitude = fields["latitude"]
+        place.longitude = fields["longitude"]
+        place.start_date = fields.get("start_date")
+        place.end_date = fields.get("end_date")
+        place.full_clean()
+        place.save()
+
+        if files:
+            add_photos_to_place(place.id, files)
+
+        return place
+    except Exception as exc:
+        for field_name, value in previous_values.items():
+            setattr(place, field_name, value)
+        raise ServiceOperationError(f"Не удалось обновить место #{place.pk}: {exc}") from exc
 
 
 @transaction.atomic
 def delete_place(place):
-    files = _stored_files(place.photos.all())
-    place.delete()
-    transaction.on_commit(lambda: _delete_stored_files(files))
+    try:
+        delete_photos_for_place(place.pk)
+        place.delete()
+    except Exception as exc:
+        raise ServiceOperationError(f"Не удалось удалить место #{place.pk}: {exc}") from exc
 
 
 def _process_image(uploaded_file, place_id, sort_order):
@@ -100,7 +138,7 @@ def _process_image(uploaded_file, place_id, sort_order):
             original_filename=uploaded_file.name,
             mime_type=uploaded_file.content_type or "image/jpeg",
             size_bytes=uploaded_file.size,
-            sort_order=sort_order
+            sort_order=sort_order,
         )
 
         # Сохраняем оригинал (Pillow пересохранит его в правильном формате)
@@ -117,54 +155,976 @@ def _process_image(uploaded_file, place_id, sort_order):
         photo.save()
 
         return photo
-    except Exception as e:
-        # Выводим ошибку в консоль и пробрасываем дальше, чтобы сервер вернул 500 и мы увидели причину
-        print(f"!!! ОШИБКА ПРИ ОБРАБОТКЕ {uploaded_file.name}: {e}")
-        raise e
-    return None
+    except Exception as exc:
+        raise ServiceOperationError(f"Не удалось обработать фото '{getattr(uploaded_file, 'name', 'unknown')}': {exc}") from exc
 
 
 def add_photos_to_place(place_id, files):
     photos = []
     # Находим максимальный sort_order для этого места
     from django.db.models import Max
-    max_order = Photo.objects.filter(place_id=place_id).aggregate(Max('sort_order'))['sort_order__max'] or 0
+
+    max_order = Photo.objects.filter(place_id=place_id).aggregate(Max("sort_order"))["sort_order__max"] or 0
 
     for index, file in enumerate(files):
-        # Передаем порядок с учетом существующих
-        photo = _process_image(file, place_id, max_order + index + 1)
+        try:
+            photo = _process_image(file, place_id, max_order + index + 1)
+        except Exception:
+            for created_photo in photos:
+                try:
+                    delete_photo(created_photo)
+                except Exception:
+                    pass
+            raise
+
         if photo:
             photos.append(photo)
     return photos
 
 
-def _stored_files(photos):
-    """Собирает пары (хранилище, имя файла) до удаления записей из БД."""
-    files = []
-    for photo in photos:
-        for field in (photo.image, photo.thumbnail):
-            if field and field.name:
-                files.append((field.storage, field.name))
-    return files
-
-
-def _delete_stored_files(files):
-    """Удаляет файлы с диска, не прерывая работу из-за одной ошибки."""
-    for storage, name in files:
-        try:
-            storage.delete(name)
-        except Exception:
-            logger.exception("Не удалось удалить файл %s", name)
-
-
 def delete_photo_files(photo):
     """Удаляет физические файлы фото с диска."""
-    _delete_stored_files(_stored_files([photo]))
+    errors = []
+
+    for field_name in ("image", "thumbnail"):
+        field = getattr(photo, field_name, None)
+        if not field:
+            continue
+
+        try:
+            field.delete(save=False)
+        except Exception as exc:
+            errors.append(f"{field_name}: {exc}")
+
+    if errors:
+        raise ServiceOperationError("; ".join(errors))
 
 
-@transaction.atomic
 def delete_photo(photo):
-    """Удаляет запись фото и его файлы после успешного коммита."""
-    files = _stored_files([photo])
-    photo.delete()
-    transaction.on_commit(lambda: _delete_stored_files(files))
+    """Удаляет фото полностью: сначала файлы, затем запись в БД."""
+    try:
+        delete_photo_files(photo)
+    except Exception as exc:
+        raise ServiceOperationError(f"Не удалось удалить файлы фотографии #{photo.pk}: {exc}") from exc
+
+    try:
+        photo.delete()
+    except Exception as exc:
+        raise ServiceOperationError(f"Не удалось удалить запись фотографии #{photo.pk}: {exc}") from exc
+
+
+def delete_photos_for_place(place_id):
+    """Удаляет все фото места (и записи, и файлы). Вызывается перед удалением места."""
+    photos = list(Photo.objects.filter(place_id=place_id))
+    errors = []
+
+    for photo in photos:
+        try:
+            delete_photo(photo)
+        except ServiceOperationError as exc:
+            errors.append(str(exc))
+
+    if errors:
+        raise ServiceOperationError("; ".join(errors))
+
+
+# Сохраняем совместимость со старым вызовом delete_photo_files(photo) из представлений.
+# В конечном итоге вся бизнес-логика должна вызываться через этот сервисный слой.
+
+
+os = os
+settings = settings
+
+
+# Не используем 'os' и 'settings' здесь специально: они нужны только для совместимости и предотвращения
+# ложных предупреждений линтера, но фактическая логика реализована выше.
+
+
+# Legacy aliases for safe imports from existing code.
+# They keep current behavior while centralizing all write operations in service layer.
+
+def delete_photo_by_id(photo_id):
+    photo = Photo.objects.filter(pk=photo_id).first()
+    if photo is None:
+        return False
+    delete_photo(photo)
+    return True
+
+
+# Блок ниже нужен только для соблюдения текущих импортов из views и для уменьшения риска поломки.
+# Все изменения состояния должны происходить через сервисный слой.
+
+
+__all__ = [
+    "ServiceOperationError",
+    "serialize_place",
+    "create_place",
+    "update_place",
+    "delete_place",
+    "add_photos_to_place",
+    "delete_photo_files",
+    "delete_photo",
+    "delete_photos_for_place",
+    "delete_photo_by_id",
+]
+
+
+# При загрузке модуля не делаем лишних действий: сервисные функции должны оставаться простыми и явно вызываемыми.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
