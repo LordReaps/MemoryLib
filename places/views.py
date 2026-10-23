@@ -1,3 +1,5 @@
+from mimetypes import guess_type
+
 from django.http import JsonResponse, Http404, FileResponse
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse
@@ -7,7 +9,7 @@ from django.views.decorators.http import require_POST
 from . import auth
 from .forms import PlaceForm, LoginForm
 from .models import Place, Photo
-from .services import create_place, delete_place, serialize_place, update_place, add_photos_to_place, delete_photo_files
+from .services import create_place, delete_photo, delete_place, serialize_place, update_place, add_photos_to_place
 
 
 def _place_url_template(name):
@@ -15,7 +17,7 @@ def _place_url_template(name):
 
 
 def map_view(request):
-    places_data = [serialize_place(place) for place in Place.objects.all()]
+    places_data = [serialize_place(place) for place in Place.objects.prefetch_related("photos")]
     return render(
         request,
         "map.html",
@@ -35,7 +37,6 @@ def _json_errors(form):
 
 @require_POST
 def place_create(request):
-    print("=== FILES ===", request.FILES)
     form = PlaceForm(request.POST)
     if not form.is_valid():
         return _json_errors(form)
@@ -94,15 +95,24 @@ def serve_photo(request, pk, file_type):
     if not file_field:
         raise Http404
 
-    # Используем FileResponse для отдачи файла
-    return FileResponse(file_field.open('rb'), content_type=photo.mime_type or 'application/octet-stream')
+    try:
+        file_handle = file_field.open("rb")
+    except (FileNotFoundError, OSError):
+        raise Http404
+
+    content_type, _ = guess_type(file_field.name)
+    if not content_type:
+        content_type = "image/webp" if file_type == "thumb" else "image/jpeg"
+
+    response = FileResponse(file_handle, content_type=content_type)
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
 
 @require_POST
 def photo_delete(request, pk):
     photo = get_object_or_404(Photo, pk=pk)
     place_id = photo.place.id
-    delete_photo_files(photo) # импортировать из services
-    photo.delete()
+    delete_photo(photo)
     return JsonResponse({"ok": True, "place_id": place_id})
 
 

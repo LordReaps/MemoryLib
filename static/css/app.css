@@ -5,6 +5,10 @@ html, body {
   color: #1a1a1a;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 #map {
   position: fixed;
   inset: 0;
@@ -60,6 +64,7 @@ html, body {
   border-radius: 0.85rem;
   background: rgba(255, 255, 255, 0.97);
   box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.16);
+  box-sizing: border-box;
 }
 
 .place-form__heading {
@@ -101,6 +106,49 @@ html, body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.6rem;
+}
+
+.place-form__photos {
+  margin-bottom: 0.9rem;
+}
+
+.photo-picker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  padding: 0.55rem 1rem;
+  border: 1px dashed #c4c4c4;
+  border-radius: 0.6rem;
+  background: #fafafa;
+  color: #333;
+  font-size: 0.9rem;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.photo-picker:hover {
+  background: #f1f1f1;
+}
+
+.photo-picker:focus-within {
+  outline: 2px solid #1a1a1a;
+  outline-offset: 2px;
+}
+
+.photo-picker__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.photo-picker__hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: #777;
 }
 
 .place-form__coords {
@@ -198,25 +246,60 @@ html, body {
   box-shadow: none;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 768px) {
   .place-form {
     right: 0;
     bottom: 0;
     left: 0;
     width: auto;
+    max-height: 90vh;
+    max-height: 90dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
     border-radius: 1rem 1rem 0 0;
-    padding-bottom: calc(1.15rem + env(safe-area-inset-bottom, 0px));
+    padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .place-form__field input,
+  .place-form__field textarea {
+    font-size: 16px;
+  }
+
+  .place-form__actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    margin-top: 0.25rem;
+    padding-top: 0.6rem;
+    padding-bottom: 0.6rem;
+    background: rgba(255, 255, 255, 0.97);
+    box-shadow: 0 -1px 0 #eee;
+  }
+
+  .place-form__actions .btn {
+    flex: 1;
+    min-height: 2.75rem;
   }
 
   .add-place-btn {
-    bottom: 1.5rem;
+    bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
     right: 1rem;
   }
 
   .pick-hint {
+    top: calc(3.75rem + env(safe-area-inset-top, 0px));
     white-space: normal;
     max-width: calc(100vw - 2rem);
     text-align: center;
+  }
+}
+
+@media (max-width: 380px) {
+  .place-form__dates {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -494,16 +577,143 @@ html, body {
   background: #cc0000;
 }
 
+/* --- Мобильная шторка места --- */
+.place-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+}
+
+.place-sheet:not([hidden]) {
+  display: flex;
+  align-items: flex-end;
+}
+
+.place-sheet__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.place-sheet__panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 85vh;
+  max-height: 85dvh;
+  background: #fff;
+  border-radius: 1.1rem 1.1rem 0 0;
+  box-shadow: 0 -0.4rem 1.5rem rgba(0, 0, 0, 0.2);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-sizing: border-box;
+}
+
+.place-sheet:not([hidden]) .place-sheet__panel {
+  animation: sheet-slide-up 0.22s ease-out;
+}
+
+@keyframes sheet-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.place-sheet__handle {
+  flex: none;
+  width: 2.5rem;
+  height: 0.3rem;
+  margin: 0.55rem auto 0.15rem;
+  border-radius: 999px;
+  background: #d8d8d8;
+}
+
+.place-sheet__close {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  color: #666;
+  font-size: 1.75rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.place-sheet__close:hover {
+  background: #f0f0f0;
+  color: #000;
+}
+
+.place-sheet__content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 1rem 1rem;
+}
+
+.place-sheet .place-popup {
+  padding: 0;
+}
+
+.place-sheet .place-popup__title {
+  padding-right: 3rem;
+  font-size: 1.25rem;
+}
+
+.place-sheet .place-popup__thumb {
+  width: 84px;
+  height: 84px;
+}
+
+.place-sheet .place-popup__actions {
+  position: sticky;
+  bottom: 0;
+  margin-top: 0.25rem;
+  padding: 0.75rem 0 0.25rem;
+  background: #fff;
+}
+
+.place-sheet .place-popup__actions .btn {
+  flex: 1;
+  min-height: 2.75rem;
+  font-size: 0.95rem;
+}
+
+body.sheet-open,
+body.lightbox-open {
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .place-sheet:not([hidden]) .place-sheet__panel {
+    animation: none;
+  }
+}
+
 /* --- Лайтбокс --- */
 .lightbox {
   position: fixed;
   inset: 0; /* Заменяет top, left, width, height. Занимает ровно весь экран */
-  background: rgba(0, 0, 0, 0.85);
+  background: rgba(0, 0, 0, 0.9);
   z-index: 9999;
   align-items: center;
   justify-content: center;
-  padding: 20px;
-  box-sizing: border-box; /* Важно! Чтобы padding не увеличивал размер */
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  box-sizing: border-box;
+  touch-action: none;
 }
 
 .lightbox:not([hidden]) {
@@ -511,27 +721,106 @@ html, body {
 }
 
 .lightbox__img {
-  max-width: 80%;
-  max-height: 80%;
+  max-width: min(100%, 1200px);
+  max-height: calc(100vh - 4rem);
+  max-height: calc(100dvh - 4rem);
+  width: auto;
+  height: auto;
   object-fit: contain; /* Картинка вписывается, сохраняя пропорции, и не растягивается */
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  user-select: none;
 }
 
 .lightbox__close {
   position: absolute;
-  top: 15px;
-  right: 20px;
-  background: none;
+  top: calc(0.5rem + env(safe-area-inset-top, 0px));
+  right: calc(0.5rem + env(safe-area-inset-right, 0px));
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.12);
   border: none;
+  border-radius: 50%;
   color: #fff;
-  font-size: 40px;
+  font-size: 2rem;
   line-height: 1;
   cursor: pointer;
-  opacity: 0.7;
-  transition: opacity 0.2s;
+  opacity: 0.85;
+  transition: opacity 0.2s, background 0.2s;
 }
 
 .lightbox__close:hover {
   opacity: 1;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.lightbox__nav {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 2rem;
+  line-height: 1;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: background 0.2s;
+}
+
+.lightbox__nav:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+.lightbox__nav--prev {
+  left: calc(0.75rem + env(safe-area-inset-left, 0px));
+}
+
+.lightbox__nav--next {
+  right: calc(0.75rem + env(safe-area-inset-right, 0px));
+}
+
+.lightbox__nav[hidden] {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .logout-form {
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    right: calc(12px + env(safe-area-inset-right, 0px));
+  }
+
+  .logout-btn {
+    min-height: 2.75rem;
+    padding: 0 14px;
+  }
+
+  .place-popup__thumb {
+    width: 76px;
+    height: 76px;
+  }
+
+  .photo-preview__wrap,
+  .photo-preview__img {
+    width: 76px;
+    height: 76px;
+  }
+
+  .photo-preview__del {
+    width: 32px;
+    height: 32px;
+    font-size: 20px;
+  }
 }

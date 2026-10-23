@@ -3,8 +3,8 @@ import hmac
 from django.conf import settings
 from django.core.cache import cache
 
-LOGIN_ATTEMPT_LIMIT = 5
-LOGIN_ATTEMPT_WINDOW_SECONDS = 900
+LOGIN_ATTEMPT_LIMIT = getattr(settings, "LOGIN_ATTEMPT_LIMIT", 5)
+LOGIN_ATTEMPT_WINDOW_SECONDS = getattr(settings, "LOGIN_ATTEMPT_WINDOW_SECONDS", 900)
 
 
 def check_password(raw: str) -> bool:

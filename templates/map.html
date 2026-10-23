@@ -40,9 +40,14 @@
         По
         <input type="date" name="end_date" id="id_end_date">
       </label>
-      <label class="place-form__field">Фотографии
-        <input type="file" name="photos" id="id_photos" multiple accept="image/*">
+    </div>
+
+    <div class="place-form__photos">
+      <label class="photo-picker" for="id_photos">
+        <span>Добавить фото</span>
+        <input type="file" name="photos" id="id_photos" class="photo-picker__input" multiple accept="image/*">
       </label>
+      <p class="photo-picker__hint">Можно выбрать несколько файлов</p>
       <div id="photo-preview" class="photo-preview"></div>
     </div>
 
@@ -54,9 +59,21 @@
     </div>
   </form>
 
+  <!-- Мобильная карточка места -->
+  <div id="place-sheet" class="place-sheet" hidden>
+    <div class="place-sheet__backdrop" id="place-sheet-backdrop"></div>
+    <section class="place-sheet__panel" role="dialog" aria-modal="true" aria-label="Информация о месте">
+      <div class="place-sheet__handle" aria-hidden="true"></div>
+      <button type="button" class="place-sheet__close" id="place-sheet-close" aria-label="Закрыть">&times;</button>
+      <div class="place-sheet__content" id="place-sheet-content"></div>
+    </section>
+  </div>
+
   <!-- Контейнер для лайтбокса (скрыт по умолчанию) -->
   <div id="lightbox" class="lightbox" hidden>
-    <button type="button" class="lightbox__close" id="lightbox-close">&times;</button>
+    <button type="button" class="lightbox__nav lightbox__nav--prev" id="lightbox-prev" aria-label="Предыдущее фото">&#8249;</button>
+    <button type="button" class="lightbox__nav lightbox__nav--next" id="lightbox-next" aria-label="Следующее фото">&#8250;</button>
+    <button type="button" class="lightbox__close" id="lightbox-close" aria-label="Закрыть">&times;</button>
     <img id="lightbox-img" class="lightbox__img" src="" alt="Просмотр фото">
   </div>
 
@@ -67,7 +84,7 @@
   {{ create_url|json_script:"create-url" }}
   {{ update_url_template|json_script:"update-url-template" }}
   {{ delete_url_template|json_script:"delete-url-template" }}
-{{ delete_photo_url_template|json_script:"delete-photo-url-template" }}
+  {{ delete_photo_url_template|json_script:"delete-photo-url-template" }}
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="{% static 'js/map.js' %}"></script>
 {% endblock %}

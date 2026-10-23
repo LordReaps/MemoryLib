@@ -25,6 +25,21 @@
 
   const deletePhotoUrlTemplate = JSON.parse(document.getElementById("delete-photo-url-template").textContent);
 
+  const mobileQuery = window.matchMedia("(max-width: 768px)");
+  const placeSheet = document.getElementById("place-sheet");
+  const placeSheetContent = document.getElementById("place-sheet-content");
+  const placeSheetClose = document.getElementById("place-sheet-close");
+  const placeSheetBackdrop = document.getElementById("place-sheet-backdrop");
+  const lightbox = document.getElementById("lightbox");
+  const lightboxImg = document.getElementById("lightbox-img");
+  const lightboxClose = document.getElementById("lightbox-close");
+  const lightboxPrev = document.getElementById("lightbox-prev");
+  const lightboxNext = document.getElementById("lightbox-next");
+
+  function isMobile() {
+    return mobileQuery.matches;
+  }
+
   delete L.Icon.Default.prototype._getIconUrl;
 
   L.Icon.Default.mergeOptions({
@@ -55,6 +70,10 @@
   let previewMarker = null;
   let editingPlaceId = null;
   let originalEditLatLng = null;
+  let sheetPlaceId = null;
+  let suppressMapClickUntil = 0;
+  let lightboxPhotos = [];
+  let lightboxIndex = 0;
 
   const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
     day: "numeric",
@@ -148,18 +167,19 @@
       const gallery = document.createElement("div");
       gallery.className = "place-popup__gallery";
 
-      place.photos.forEach(function(photo) {
+      place.photos.forEach(function(photo, index) {
         const imgWrap = document.createElement("div");
         imgWrap.className = "place-popup__thumb-wrap";
 
         const img = document.createElement("img");
         img.src = photo.thumb_url || photo.original_url;
         img.className = "place-popup__thumb";
+        img.alt = place.title;
+        img.loading = "lazy";
+        img.decoding = "async";
 
         img.addEventListener("click", function() {
-          const lb = document.getElementById("lightbox");
-          document.getElementById("lightbox-img").src = photo.original_url;
-          lb.hidden = false;
+          openLightbox(place.photos, index);
         });
 
         imgWrap.appendChild(img);
@@ -195,7 +215,13 @@
   }
 
   function bindPopup(marker, place) {
-    marker.bindPopup(buildPopupContent(place), {
+    if (isMobile()) {
+      marker.unbindPopup();
+      return;
+    }
+    marker.bindPopup(function (layer) {
+      return buildPopupContent(layer.placeData);
+    }, {
       className: "place-popup-wrap",
       closeButton: true,
       autoPan: true,
@@ -206,21 +232,35 @@
 
   function addPlaceMarker(place, openPopup) {
     const marker = L.marker([place.latitude, place.longitude], {
-    draggable: false,
-    icon: redIcon // <-- добавляем иконку
+      draggable: false,
+      icon: redIcon
     }).addTo(map);
 
     marker.placeData = place;
     bindPopup(marker, place);
     marker.on("click", function (event) {
       if (pickingPoint) {
-        L.DomEvent.stop(event);
+        if (event.originalEvent) {
+          L.DomEvent.stopPropagation(event.originalEvent);
+        }
         map.closePopup();
+        return;
+      }
+      if (isMobile()) {
+        if (event.originalEvent) {
+          L.DomEvent.stopPropagation(event.originalEvent);
+        }
+        suppressMapClickUntil = Date.now() + 300;
+        openSheet(place.id);
       }
     });
     markers.set(place.id, marker);
     if (openPopup) {
-      marker.openPopup();
+      if (isMobile()) {
+        openSheet(place.id);
+      } else {
+        marker.openPopup();
+      }
     }
     return marker;
   }
@@ -237,7 +277,11 @@
     marker.off("dragend");
     bindPopup(marker, place);
     if (openPopup) {
-      marker.openPopup();
+      if (isMobile()) {
+        openSheet(place.id);
+      } else {
+        marker.openPopup();
+      }
     }
   }
 
@@ -254,6 +298,9 @@
       previewMarker.on("dragend", function () {
         const position = previewMarker.getLatLng();
         setCoords(position.lat, position.lng);
+        requestAnimationFrame(function () {
+          panPointIntoView(position);
+        });
       });
     } else {
       previewMarker.setLatLng(latlng);
@@ -289,10 +336,13 @@
     addButton.hidden = true;
     pickHint.hidden = true;
     pickingPoint = false;
-    titleInput.focus();
+    if (!isMobile()) {
+      titleInput.focus();
+    }
   }
 
   function startCreate() {
+    closeSheet();
     closeForm();
     resetForm();
     map.closePopup();
@@ -309,6 +359,7 @@
       return;
     }
     const place = marker.placeData;
+    closeSheet();
     closeForm();
     resetForm();
     map.closePopup();
@@ -329,6 +380,9 @@
     marker.on("dragend", function () {
       const position = marker.getLatLng();
       setCoords(position.lat, position.lng);
+      requestAnimationFrame(function () {
+        panPointIntoView(position);
+      });
     });
 
     formTitle.textContent = "Редактирование";
@@ -337,7 +391,12 @@
     pickingPoint = true;
     pickHint.hidden = false;
     pickHint.textContent = "Перетащите флажок или нажмите новое место на карте.";
-    titleInput.focus();
+    if (!isMobile()) {
+      titleInput.focus();
+    }
+    requestAnimationFrame(function () {
+      panPointIntoView(originalEditLatLng);
+    });
   }
 
   function restoreEditedMarker() {
@@ -349,6 +408,37 @@
       marker.setLatLng(originalEditLatLng);
       marker.dragging.disable();
     }
+  }
+
+  function openSheet(placeId) {
+    const marker = markers.get(placeId);
+    if (!marker || !marker.placeData || !isMobile()) {
+      return;
+    }
+    const place = marker.placeData;
+    sheetPlaceId = place.id;
+    map.closePopup();
+    placeSheetContent.replaceChildren(buildPopupContent(place));
+    placeSheet.hidden = false;
+    document.body.classList.add("sheet-open");
+  }
+
+  function closeSheet() {
+    placeSheet.hidden = true;
+    placeSheetContent.replaceChildren();
+    sheetPlaceId = null;
+    document.body.classList.remove("sheet-open");
+  }
+
+  function panPointIntoView(latlng) {
+    if (!isMobile()) {
+      return;
+    }
+    const formHeight = form.hidden ? 0 : form.getBoundingClientRect().height;
+    map.panInside(latlng, {
+      paddingTopLeft: [24, 72],
+      paddingBottomRight: [24, formHeight + 24],
+    });
   }
 
   function confirmDelete(place) {
@@ -377,6 +467,9 @@
           map.removeLayer(marker);
           markers.delete(place.id);
         }
+        if (sheetPlaceId === place.id) {
+          closeSheet();
+        }
         if (editingPlaceId === place.id) {
           closeForm();
         }
@@ -387,7 +480,11 @@
   }
 
   map.on("click", function (event) {
+    if (Date.now() < suppressMapClickUntil) {
+      return;
+    }
     if (!pickingPoint) {
+      closeSheet();
       return;
     }
     if (editingPlaceId != null) {
@@ -395,6 +492,9 @@
       if (marker) {
         marker.setLatLng(event.latlng);
         setCoords(event.latlng.lat, event.latlng.lng);
+        requestAnimationFrame(function () {
+          panPointIntoView(event.latlng);
+        });
       }
       return;
     }
@@ -402,6 +502,9 @@
     if (form.hidden) {
       openCreateForm();
     }
+    requestAnimationFrame(function () {
+      panPointIntoView(event.latlng);
+    });
   });
 
   addButton.addEventListener("click", startCreate);
@@ -413,10 +516,19 @@
       "Нажмите на карту, чтобы выбрать точку. Затем можно сдвинуть флажок.";
   });
 
-    const photosInput = document.getElementById("id_photos");
+  const photosInput = document.getElementById("id_photos");
   const photoPreview = document.getElementById("photo-preview");
   let previewUrls = [];
-  let selectedFiles = new DataTransfer(); // Файлы, которые ждут отправки
+  let selectedFiles = [];
+
+  function currentPlacePhotos() {
+    const placeId = Number(placeIdInput.value);
+    if (!placeId) {
+      return null;
+    }
+    const marker = markers.get(placeId);
+    return marker && marker.placeData ? (marker.placeData.photos || []) : null;
+  }
 
   // Функция отрисовки одного превью с крестиком
   function createPreviewItem(src, onRemove) {
@@ -431,6 +543,7 @@
     delBtn.type = "button";
     delBtn.className = "photo-preview__del";
     delBtn.innerHTML = "&times;";
+    delBtn.setAttribute("aria-label", "Удалить фото");
     delBtn.addEventListener("click", onRemove);
 
     wrap.appendChild(img);
@@ -453,41 +566,43 @@
             headers: {
               "X-CSRFToken": form.querySelector("[name=csrfmiddlewaretoken]").value
             }
-          }).then(r => r.json()).then(data => {
-            if (data.ok) {
+          })
+            .then(function (response) {
+              return response.json();
+            })
+            .then(function (data) {
+              if (!data.ok) {
+                throw new Error("Не удалось удалить фото");
+              }
               // Удаляем из памяти текущего места, чтобы при сохранении формы оно не вернулось
               const marker = markers.get(data.place_id);
               if (marker && marker.placeData && marker.placeData.photos) {
-                marker.placeData.photos = marker.placeData.photos.filter(p => p.id !== photo.id);
+                marker.placeData.photos = marker.placeData.photos.filter(function (p) {
+                  return p.id !== photo.id;
+                });
               }
               // Перерисовываем превью заново
               renderPreviews(marker ? marker.placeData.photos : []);
-            }
-          });
+            })
+            .catch(function () {
+              window.alert("Не удалось удалить фото");
+            });
         });
         photoPreview.appendChild(item);
       });
     }
 
     // 2. Рисуем только что выбранные файлы
-    Array.from(selectedFiles.files).forEach(function(file, index) {
+    selectedFiles.forEach(function(file) {
       const url = URL.createObjectURL(file);
       previewUrls.push(url);
 
       const item = createPreviewItem(url, function() {
         // Сценарий 1: Удаление только что прикрепленного файла
-        const newTransfer = new DataTransfer();
-        // Копируем все файлы, КРОМЕ удаляемого
-        Array.from(selectedFiles.files).forEach((f, i) => {
-          if (i !== index) newTransfer.items.add(f);
+        selectedFiles = selectedFiles.filter(function (f) {
+          return f !== file;
         });
-        selectedFiles = newTransfer;
-        photosInput.files = selectedFiles.files; // Обновляем инпут для формы
-        URL.revokeObjectURL(url); // Освобождаем память
-
-        // Перерисовываем
-        const currentPlace = placeIdInput.value ? markers.get(Number(placeIdInput.value)).placeData : null;
-        renderPreviews(currentPlace ? currentPlace.photos : null);
+        renderPreviews(currentPlacePhotos());
       });
 
       photoPreview.appendChild(item);
@@ -501,20 +616,17 @@
   }
 
   // Слушаем выбор новых файлов
-  photosInput.addEventListener("change", function (e) {
-    for (let i = 0; i < e.target.files.length; i++) {
-      selectedFiles.items.add(e.target.files[i]);
-    }
-    photosInput.files = selectedFiles.files;
-    const currentPlace = placeIdInput.value ? markers.get(Number(placeIdInput.value)).placeData : null;
-    renderPreviews(currentPlace ? currentPlace.photos : null);
+  photosInput.addEventListener("change", function () {
+    selectedFiles = selectedFiles.concat(Array.from(photosInput.files || []));
+    photosInput.value = "";
+    renderPreviews(currentPlacePhotos());
   });
 
   // Переопределяем resetForm
   const originalResetForm = resetForm;
   resetForm = function() {
     originalResetForm();
-    selectedFiles = new DataTransfer();
+    selectedFiles = [];
     photosInput.value = "";
     clearPreviews();
   };
@@ -528,9 +640,15 @@
       ? urlFor(updateUrlTemplate, placeIdInput.value)
       : createUrl;
 
+    const formData = new FormData(form);
+    formData.delete("photos");
+    selectedFiles.forEach(function (file) {
+      formData.append("photos", file);
+    });
+
     fetch(url, {
       method: "POST",
-      body: new FormData(form),
+      body: formData,
       headers: { "X-Requested-With": "XMLHttpRequest" },
     })
       .then(function (response) {
@@ -559,22 +677,129 @@
       });
   });
 
-  // Логика закрытия лайтбокса
-  const lightbox = document.getElementById("lightbox");
-  const lightboxClose = document.getElementById("lightbox-close");
+  function showLightboxPhoto() {
+    const photo = lightboxPhotos[lightboxIndex];
+    if (!photo) {
+      return;
+    }
+    lightboxImg.src = photo.original_url;
+    const multiple = lightboxPhotos.length > 1;
+    lightboxPrev.hidden = !multiple;
+    lightboxNext.hidden = !multiple;
+  }
+
+  function openLightbox(photos, index) {
+    lightboxPhotos = photos || [];
+    lightboxIndex = index;
+    showLightboxPhoto();
+    lightbox.hidden = false;
+    document.body.classList.add("lightbox-open");
+  }
 
   function closeLightbox() {
     lightbox.hidden = true;
-    document.getElementById("lightbox-img").src = ""; // Очищаем, чтобы не грузить впустую
+    lightboxImg.removeAttribute("src");
+    lightboxPhotos = [];
+    lightboxIndex = 0;
+    document.body.classList.remove("lightbox-open");
+  }
+
+  function moveLightbox(delta) {
+    if (lightboxPhotos.length < 2) {
+      return;
+    }
+    lightboxIndex = (lightboxIndex + delta + lightboxPhotos.length) % lightboxPhotos.length;
+    showLightboxPhoto();
   }
 
   lightboxClose.addEventListener("click", closeLightbox);
+  lightboxPrev.addEventListener("click", function () {
+    moveLightbox(-1);
+  });
+  lightboxNext.addEventListener("click", function () {
+    moveLightbox(1);
+  });
   lightbox.addEventListener("click", function (e) {
     // Закрываем, если кликнули по фону, а не по самому фото
     if (e.target === lightbox) {
       closeLightbox();
     }
   });
+
+  let lightboxTouchStartX = null;
+  let lightboxTouchStartY = null;
+
+  lightbox.addEventListener("touchstart", function (e) {
+    if (e.touches.length !== 1) {
+      return;
+    }
+    lightboxTouchStartX = e.touches[0].clientX;
+    lightboxTouchStartY = e.touches[0].clientY;
+  }, { passive: true });
+
+  lightbox.addEventListener("touchend", function (e) {
+    if (lightboxTouchStartX === null || e.changedTouches.length !== 1) {
+      return;
+    }
+    const dx = e.changedTouches[0].clientX - lightboxTouchStartX;
+    const dy = e.changedTouches[0].clientY - lightboxTouchStartY;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+      moveLightbox(dx < 0 ? 1 : -1);
+    }
+    lightboxTouchStartX = null;
+    lightboxTouchStartY = null;
+  }, { passive: true });
+
+  document.addEventListener("keydown", function (e) {
+    if (!lightbox.hidden) {
+      if (e.key === "Escape") {
+        closeLightbox();
+      } else if (e.key === "ArrowLeft") {
+        moveLightbox(-1);
+      } else if (e.key === "ArrowRight") {
+        moveLightbox(1);
+      }
+      return;
+    }
+    if (e.key === "Escape" && !placeSheet.hidden) {
+      closeSheet();
+    }
+  });
+
+  placeSheetClose.addEventListener("click", closeSheet);
+  placeSheetBackdrop.addEventListener("click", closeSheet);
+
+  function syncMarkerPopups() {
+    map.closePopup();
+    markers.forEach(function (marker) {
+      bindPopup(marker, marker.placeData);
+    });
+    if (!isMobile()) {
+      closeSheet();
+    }
+  }
+
+  if (mobileQuery.addEventListener) {
+    mobileQuery.addEventListener("change", syncMarkerPopups);
+  } else if (mobileQuery.addListener) {
+    mobileQuery.addListener(syncMarkerPopups);
+  }
+
+  let resizeTimer = null;
+  function handleViewportResize() {
+    if (resizeTimer) {
+      window.clearTimeout(resizeTimer);
+    }
+    resizeTimer = window.setTimeout(function () {
+      map.invalidateSize({ pan: false });
+    }, 150);
+  }
+
+  window.addEventListener("resize", handleViewportResize);
+  window.addEventListener("orientationchange", handleViewportResize);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", handleViewportResize);
+  }
 
   places.forEach(function (place) {
     addPlaceMarker(place, false);

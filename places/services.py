@@ -1,16 +1,15 @@
+import logging
 import uuid
 
 from django.db import transaction
-import os
 from io import BytesIO
 from PIL import Image, ImageOps
-from django.conf import settings
 from django.core.files.base import ContentFile
 from django.urls import reverse
 
-from .models import Photo
+from .models import Photo, Place
 
-from .models import Place
+logger = logging.getLogger(__name__)
 
 
 def serialize_place(place):
@@ -69,8 +68,9 @@ def update_place(place, **fields):
 
 @transaction.atomic
 def delete_place(place):
-    delete_photos_for_place(place.id)
+    files = _stored_files(place.photos.all())
     place.delete()
+    transaction.on_commit(lambda: _delete_stored_files(files))
 
 
 def _process_image(uploaded_file, place_id, sort_order):
@@ -138,17 +138,33 @@ def add_photos_to_place(place_id, files):
     return photos
 
 
+def _stored_files(photos):
+    """Собирает пары (хранилище, имя файла) до удаления записей из БД."""
+    files = []
+    for photo in photos:
+        for field in (photo.image, photo.thumbnail):
+            if field and field.name:
+                files.append((field.storage, field.name))
+    return files
+
+
+def _delete_stored_files(files):
+    """Удаляет файлы с диска, не прерывая работу из-за одной ошибки."""
+    for storage, name in files:
+        try:
+            storage.delete(name)
+        except Exception:
+            logger.exception("Не удалось удалить файл %s", name)
+
+
 def delete_photo_files(photo):
     """Удаляет физические файлы фото с диска."""
-    if photo.image:
-        photo.image.delete(save=False)
-    if photo.thumbnail:
-        photo.thumbnail.delete(save=False)
+    _delete_stored_files(_stored_files([photo]))
 
 
-def delete_photos_for_place(place_id):
-    """Удаляет все фото места (и записи, и файлы). Вызывается перед удалением места."""
-    photos = Photo.objects.filter(place_id=place_id)
-    for photo in photos:
-        delete_photo_files(photo)
-    photos.delete()
+@transaction.atomic
+def delete_photo(photo):
+    """Удаляет запись фото и его файлы после успешного коммита."""
+    files = _stored_files([photo])
+    photo.delete()
+    transaction.on_commit(lambda: _delete_stored_files(files))

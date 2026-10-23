@@ -1,9 +1,26 @@
-from django.core.exceptions import ValidationError
-from django.test import TestCase
-from django.urls import reverse
+import os
+import shutil
+import tempfile
+from io import BytesIO
 
-from .models import Place
-from .services import create_place, delete_place, update_place
+from django.conf import settings
+from django.core.cache import cache
+from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import Client, TestCase, override_settings
+from django.urls import reverse
+from PIL import Image
+
+from .models import Photo, Place
+from .services import create_place, delete_photo, delete_place, update_place
+
+
+class AuthenticatedTestCase(TestCase):
+    def setUp(self):
+        super().setUp()
+        session = self.client.session
+        session["authenticated"] = True
+        session.save()
 
 
 class PlaceModelTests(TestCase):
@@ -100,7 +117,7 @@ class PlaceServiceTests(TestCase):
             create_place(title="За краем", latitude=95.0, longitude=10.0)
 
 
-class MapViewTests(TestCase):
+class MapViewTests(AuthenticatedTestCase):
     def test_map_view_includes_places_data(self):
         Place.objects.create(
             title="Берлин",
@@ -113,9 +130,12 @@ class MapViewTests(TestCase):
         self.assertContains(response, '"latitude": 52.52')
         self.assertContains(response, '"longitude": 13.405')
         self.assertContains(response, "add-place-btn")
+        self.assertContains(response, 'id="place-sheet"')
+        self.assertContains(response, 'id="lightbox-prev"')
+        self.assertContains(response, 'id="photo-preview"')
 
 
-class PlaceViewTests(TestCase):
+class PlaceViewTests(AuthenticatedTestCase):
     def test_create_place_via_post(self):
         response = self.client.post(
             reverse("places:place_create"),
@@ -189,3 +209,132 @@ class PlaceViewTests(TestCase):
     def test_create_rejects_get(self):
         response = self.client.get(reverse("places:place_create"))
         self.assertEqual(response.status_code, 405)
+
+
+class AuthTests(TestCase):
+    def setUp(self):
+        cache.clear()
+
+    def test_map_redirects_anonymous(self):
+        response = self.client.get(reverse("places:map"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
+
+    def test_login_with_correct_password(self):
+        response = self.client.post(
+            reverse("login"),
+            {"password": settings.SITE_PASSWORD},
+        )
+        self.assertRedirects(response, reverse("places:map"))
+
+    def test_login_with_wrong_password(self):
+        response = self.client.post(reverse("login"), {"password": "wrong"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Неверный пароль")
+        self.assertNotIn("authenticated", self.client.session)
+
+    def test_login_locks_after_limit(self):
+        for _ in range(settings.LOGIN_ATTEMPT_LIMIT):
+            self.client.post(reverse("login"), {"password": "wrong"})
+
+        response = self.client.post(
+            reverse("login"),
+            {"password": settings.SITE_PASSWORD},
+        )
+        self.assertContains(response, "Слишком много попыток")
+
+    def test_logout_flushes_session(self):
+        session = self.client.session
+        session["authenticated"] = True
+        session.save()
+
+        response = self.client.post(reverse("logout"))
+
+        self.assertRedirects(response, reverse("login"))
+        self.assertNotIn("authenticated", self.client.session)
+
+
+class PhotoAccessTests(AuthenticatedTestCase):
+    def setUp(self):
+        super().setUp()
+        self.media_dir = tempfile.mkdtemp()
+        self.override = override_settings(MEDIA_ROOT=self.media_dir)
+        self.override.enable()
+        self.place = create_place(title="Фото", latitude=10.0, longitude=10.0)
+        self.photo = self._create_photo()
+
+    def tearDown(self):
+        self.override.disable()
+        shutil.rmtree(self.media_dir, ignore_errors=True)
+        super().tearDown()
+
+    def _image_file(self, name, image_format, content_type):
+        buffer = BytesIO()
+        Image.new("RGB", (2, 2), "red").save(buffer, format=image_format)
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type=content_type)
+
+    def _create_photo(self):
+        return Photo.objects.create(
+            place=self.place,
+            image=self._image_file("original.jpg", "JPEG", "image/jpeg"),
+            thumbnail=self._image_file("thumb.webp", "WEBP", "image/webp"),
+            original_filename="original.jpg",
+            mime_type="image/png",
+            size_bytes=100,
+        )
+
+    def _photo_url(self, file_type):
+        return reverse(
+            "places:serve_photo",
+            kwargs={"pk": self.photo.pk, "file_type": file_type},
+        )
+
+    def test_serves_original_with_jpeg_content_type(self):
+        response = self.client.get(self._photo_url("original"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/jpeg")
+        self.assertTrue(b"".join(response.streaming_content))
+
+    def test_serves_thumbnail_with_webp_content_type(self):
+        response = self.client.get(self._photo_url("thumb"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/webp")
+        self.assertTrue(b"".join(response.streaming_content))
+
+    def test_photo_requires_auth(self):
+        response = Client().get(self._photo_url("original"))
+        self.assertEqual(response.status_code, 302)
+
+    def test_missing_file_returns_404(self):
+        os.remove(self.photo.image.path)
+
+        response = self.client.get(self._photo_url("original"))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_delete_photo_removes_record_and_files(self):
+        photo_id = self.photo.pk
+        image_path = self.photo.image.path
+        thumbnail_path = self.photo.thumbnail.path
+
+        with self.captureOnCommitCallbacks(execute=True):
+            delete_photo(self.photo)
+
+        self.assertFalse(Photo.objects.filter(pk=photo_id).exists())
+        self.assertFalse(os.path.exists(image_path))
+        self.assertFalse(os.path.exists(thumbnail_path))
+
+    def test_delete_place_removes_photos_and_files(self):
+        place_id = self.place.pk
+        image_path = self.photo.image.path
+        thumbnail_path = self.photo.thumbnail.path
+
+        with self.captureOnCommitCallbacks(execute=True):
+            delete_place(self.place)
+
+        self.assertFalse(Place.objects.filter(pk=place_id).exists())
+        self.assertFalse(Photo.objects.filter(place_id=place_id).exists())
+        self.assertFalse(os.path.exists(image_path))
+        self.assertFalse(os.path.exists(thumbnail_path))
