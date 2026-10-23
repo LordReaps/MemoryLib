@@ -1,19 +1,10 @@
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import models
-from django.db import migrations, transaction
-
-
-def _empty_file_data(name):
-    return SimpleUploadedFile(name=name, content=b"placeholder", size=9)
+from django.db import migrations
 
 
 class Migration(migrations.Migration):
     initial = False
-
-    dependencies = [
-        ("places", "0001_initial"),
-    ]
-
+    dependencies = [("places", "0001_initial")]
     operations = [
         migrations.CreateModel(
             name="ChangeRequest",

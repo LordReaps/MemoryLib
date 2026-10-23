@@ -5,7 +5,6 @@ from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
 load_dotenv(BASE_DIR / ".env")
 
 
@@ -17,18 +16,19 @@ def env_list(name, default=""):
     return [item.strip() for item in os.environ.get(name, default).split(",") if item.strip()]
 
 
-SECRET_KEY = os.environ["SECRET_KEY"]  # без значения по умолчанию: пусть падает, если не задан
+SECRET_KEY = os.environ["SECRET_KEY"]
 DEBUG = env_bool("DEBUG", False)
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "127.0.0.1,localhost")
 
 SITE_PASSWORD = os.getenv("SITE_PASSWORD")
 if not SITE_PASSWORD:
-    raise ImproperlyConfigured(
-        "SITE_PASSWORD не задан."
-    )
+    raise ImproperlyConfigured("SITE_PASSWORD не задан.")
 
-# Флаг для production: включает Secure-флаги cookie (требует HTTPS).
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
+TELEGRAM_BOT_POLLING = env_bool("TELEGRAM_BOT_POLLING", True)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -98,19 +98,15 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 
-MEDIA_URL = "media/"
+MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# --- Сессии и cookie ---
 SESSION_COOKIE_SECURE = COOKIE_SECURE
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
-
 CSRF_COOKIE_SECURE = COOKIE_SECURE
 
 LOGIN_ATTEMPT_LIMIT = int(os.getenv("LOGIN_ATTEMPT_LIMIT", "5"))
 LOGIN_ATTEMPT_WINDOW_SECONDS = int(os.getenv("LOGIN_ATTEMPT_WINDOW_SECONDS", "900"))
 
-MEDIA_URL = "/media/"
-MEDIA_ROOT = os.path.join(BASE_DIR, "media")

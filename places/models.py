@@ -29,14 +29,8 @@ class Place(models.Model):
 
     def clean(self):
         super().clean()
-        if (
-            self.start_date
-            and self.end_date
-            and self.end_date < self.start_date
-        ):
-            raise ValidationError(
-                {"end_date": "Дата окончания не может быть раньше даты начала."}
-            )
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValidationError({"end_date": "Дата окончания не может быть раньше даты начала."})
 
 
 class Photo(models.Model):
@@ -44,7 +38,7 @@ class Photo(models.Model):
         Place,
         on_delete=models.CASCADE,
         related_name="photos",
-        verbose_name="Место"
+        verbose_name="Место",
     )
     image = models.ImageField(upload_to="places/%Y/%m/%d/originals/", verbose_name="Оригинал")
     thumbnail = models.ImageField(upload_to="places/%Y/%m/%d/thumbnails/", verbose_name="Миниатюра", blank=True)
@@ -89,7 +83,7 @@ class ChangeRequest(models.Model):
     STATUS_CANCELLED = "CANCELLED"
     STATUS_CHOICES = [
         (STATUS_PENDING, "Ожидает подтверждения"),
-        (STATUS_APPROVED, "Подтве��ждена"),
+        (STATUS_APPROVED, "Подтверждена"),
         (STATUS_REJECTED, "Отклонена"),
         (STATUS_APPLIED, "Применена"),
         (STATUS_FAILED, "Ошибка"),
@@ -129,3 +123,4 @@ class ChangeRequest(models.Model):
         if self.action == self.ACTION_DELETE:
             return f"Удаление места #{self.entity_id}"
         return "Заявка"
+
