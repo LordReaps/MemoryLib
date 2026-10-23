@@ -1,259 +1,297 @@
+import json
+import shutil
 import uuid
+from pathlib import Path
 
-from django.db import transaction
-import os
-from io import BytesIO
-from PIL import Image, ImageOps
 from django.conf import settings
-from django.core.files.base import ContentFile
-from django.urls import reverse
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import transaction
+from django.utils import timezone
 
-from .models import Photo
-
-from .models import Place
+from .models import ChangeRequest, Photo, Place
 
 
 class ServiceOperationError(RuntimeError):
     """Бизнес-ошибка сервиса: операция с местом или фотографиями не выполнена."""
 
 
-def serialize_place(place):
-    return {
-        "id": place.id,
-        "title": place.title,
-        "description": place.description,
-        "latitude": place.latitude,
-        "longitude": place.longitude,
-        "start_date": place.start_date.isoformat() if place.start_date else None,
-        "end_date": place.end_date.isoformat() if place.end_date else None,
-        # Добавляем фото (используем reverse для генерации URL)
-        "photos": [
+def _change_requests_root():
+    return Path(settings.MEDIA_ROOT) / "change_requests"
+
+
+def _get_temp_directory(change_request):
+    if change_request.temp_storage_path:
+        return Path(change_request.temp_storage_path)
+    root = _change_requests_root() / str(change_request.pk)
+    change_request.temp_storage_path = str(root)
+    change_request.save(update_fields=["temp_storage_path"])
+    return root
+
+
+def _cleanup_temp_directory(change_request):
+    path = Path(change_request.temp_storage_path) if change_request.temp_storage_path else None
+    if not path:
+        return
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+    change_request.temp_storage_path = ""
+    change_request.save(update_fields=["temp_storage_path"])
+
+
+def _save_queued_files(change_request, uploaded_files):
+    if not uploaded_files:
+        return []
+    temp_dir = _get_temp_directory(change_request)
+    files_dir = temp_dir / "files"
+    files_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files = []
+    for index, uploaded in enumerate(uploaded_files):
+        content = uploaded.read()
+        original_name = getattr(uploaded, "name", f"photo_{index}.jpg") or f"photo_{index}.jpg"
+        safe_name = f"{uuid.uuid4().hex}_{Path(original_name).name}"
+        destination = files_dir / safe_name
+        destination.write_bytes(content)
+        saved_files.append(
             {
-                "id": p.id,
-                # Проверяем, есть ли реально файл миниатюры
-                "thumb_url": reverse("places:serve_photo", kwargs={"pk": p.id, "file_type": "thumb"}) if p.thumbnail else None,
-                "original_url": reverse("places:serve_photo", kwargs={"pk": p.id, "file_type": "original"})
-            } for p in place.photos.all()
-        ]
-    }
-
-
-def _build_place(**fields):
-    place = Place(
-        title=fields["title"],
-        description=fields.get("description") or "",
-        latitude=fields["latitude"],
-        longitude=fields["longitude"],
-        start_date=fields.get("start_date"),
-        end_date=fields.get("end_date"),
-    )
-    place.full_clean()
-    return place
-
-
-@transaction.atomic
-def create_place(**fields):
-    files = fields.pop("files", None)
-    place = None
-    try:
-        place = _build_place(**fields)
-        place.save()
-        if files:
-            add_photos_to_place(place.id, files)
-        return place
-    except Exception as exc:
-        if place and place.pk:
+                "stored_name": safe_name,
+                "original_name": original_name,
+                "mime_type": getattr(uploaded, "content_type", "application/octet-stream") or "application/octet-stream",
+                "size_bytes": len(content),
+            }
+        )
+        if hasattr(uploaded, "seek"):
             try:
-                delete_place(place)
+                uploaded.seek(0)
             except Exception:
                 pass
-        raise ServiceOperationError(f"Не удалось создать место '{fields.get('title', '')}': {exc}") from exc
+
+    change_request.payload["files"] = saved_files
+    change_request.save(update_fields=["payload"])
+    return saved_files
 
 
-@transaction.atomic
-def update_place(place, **fields):
-    files = fields.pop("files", None)
-    previous_values = {
+def _queued_files_from_payload(change_request):
+    files_payload = (change_request.payload or {}).get("files") or []
+    if not files_payload:
+        return []
+
+    temp_dir = _get_temp_directory(change_request)
+    files_dir = temp_dir / "files"
+    if not files_dir.exists():
+        return []
+
+    result = []
+    for item in files_payload:
+        stored_name = item.get("stored_name")
+        if not stored_name:
+            continue
+        path = files_dir / stored_name
+        if not path.exists():
+            continue
+        data = path.read_bytes()
+        result.append(
+            SimpleUploadedFile(
+                name=item.get("original_name") or stored_name,
+                content=data,
+                size=len(data),
+            )
+        )
+    return result
+
+
+def _queued_object_from_payload(change_request):
+    payload = change_request.payload or {}
+    return {
+        "title": payload.get("title"),
+        "description": payload.get("description") or "",
+        "latitude": payload.get("latitude"),
+        "longitude": payload.get("longitude"),
+        "start_date": payload.get("start_date") or None,
+        "end_date": payload.get("end_date") or None,
+    }
+
+
+def _request_hash_for_payload(payload):
+    return uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(payload, sort_keys=True, default=str)).hex
+
+
+def queue_place_create(**fields):
+    uploaded_files = fields.pop("files", [])
+    payload = {
+        "title": fields["title"],
+        "description": fields.get("description") or "",
+        "latitude": fields["latitude"],
+        "longitude": fields["longitude"],
+        "start_date": fields.get("start_date"),
+        "end_date": fields.get("end_date"),
+    }
+    change_request = ChangeRequest.objects.create(
+        action=ChangeRequest.ACTION_CREATE,
+        entity_type=ChangeRequest.ENTITY_PLACE,
+        payload=payload,
+        status=ChangeRequest.STATUS_PENDING,
+    )
+    change_request.request_hash = _request_hash_for_payload(payload)
+    change_request.save(update_fields=["request_hash"])
+    _save_queued_files(change_request, uploaded_files)
+    return change_request
+
+
+def queue_place_update(place, **fields):
+    uploaded_files = fields.pop("files", [])
+    payload = {
+        "place_id": place.pk,
+        "title": fields["title"],
+        "description": fields.get("description") or "",
+        "latitude": fields["latitude"],
+        "longitude": fields["longitude"],
+        "start_date": fields.get("start_date"),
+        "end_date": fields.get("end_date"),
+    }
+    change_request = ChangeRequest.objects.create(
+        action=ChangeRequest.ACTION_UPDATE,
+        entity_type=ChangeRequest.ENTITY_PLACE,
+        entity_id=place.pk,
+        payload=payload,
+        status=ChangeRequest.STATUS_PENDING,
+    )
+    change_request.request_hash = _request_hash_for_payload(payload)
+    change_request.save(update_fields=["request_hash"])
+    _save_queued_files(change_request, uploaded_files)
+    return change_request
+
+
+def queue_place_delete(place):
+    payload = {
+        "place_id": place.pk,
         "title": place.title,
         "description": place.description,
         "latitude": place.latitude,
         "longitude": place.longitude,
-        "start_date": place.start_date,
-        "end_date": place.end_date,
+        "start_date": str(place.start_date) if place.start_date else None,
+        "end_date": str(place.end_date) if place.end_date else None,
     }
+    change_request = ChangeRequest.objects.create(
+        action=ChangeRequest.ACTION_DELETE,
+        entity_type=ChangeRequest.ENTITY_PLACE,
+        entity_id=place.pk,
+        payload=payload,
+        status=ChangeRequest.STATUS_PENDING,
+    )
+    change_request.request_hash = _request_hash_for_payload(payload)
+    change_request.save(update_fields=["request_hash"])
+    return change_request
 
-    try:
-        place.title = fields["title"]
-        place.description = fields.get("description") or ""
-        place.latitude = fields["latitude"]
-        place.longitude = fields["longitude"]
-        place.start_date = fields.get("start_date")
-        place.end_date = fields.get("end_date")
-        place.full_clean()
-        place.save()
 
-        if files:
-            add_photos_to_place(place.id, files)
-
-        return place
-    except Exception as exc:
-        for field_name, value in previous_values.items():
-            setattr(place, field_name, value)
-        raise ServiceOperationError(f"Не удалось обновить место #{place.pk}: {exc}") from exc
+def reject_change_request(change_request_id, reviewed_by="system"):
+    change_request = ChangeRequest.objects.get(pk=change_request_id)
+    change_request.status = ChangeRequest.STATUS_REJECTED
+    change_request.reviewed_at = timezone.now()
+    change_request.reviewed_by = reviewed_by
+    change_request.save(update_fields=["status", "reviewed_at", "reviewed_by", "updated_at"])
+    _cleanup_temp_directory(change_request)
+    return change_request
 
 
 @transaction.atomic
-def delete_place(place):
-    try:
-        delete_photos_for_place(place.pk)
-        place.delete()
-    except Exception as exc:
-        raise ServiceOperationError(f"Не удалось удалить место #{place.pk}: {exc}") from exc
-
-
-def _process_image(uploaded_file, place_id, sort_order):
-    """Внутренняя функция: делает миниатюру и готовит объект Photo."""
-    try:
-        # Открываем файл через Pillow (проверка, что это картинка)
-        img = Image.open(uploaded_file)
-
-        # Учитываем EXIF-поворот (чтобы фото с телефона не лежали на боку)
-        img = ImageOps.exif_transpose(img)
-
-        # Конвертируем в RGB для безопасного сохранения (если PNG с прозрачностью)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-
-        # Генерируем миниатюру (макс. 400px по большей стороне)
-        thumb = img.copy()
-        thumb.thumbnail((400, 400))
-
-        thumb_io = BytesIO()
-        thumb.save(thumb_io, format="WEBP", quality=85)
-        thumb_file = ContentFile(thumb_io.getvalue())
-
-        # Создаем запись в БД (файл оригинала прикрепится чуть ниже)
-        photo = Photo(
-            place_id=place_id,
-            original_filename=uploaded_file.name,
-            mime_type=uploaded_file.content_type or "image/jpeg",
-            size_bytes=uploaded_file.size,
-            sort_order=sort_order,
-        )
-
-        # Сохраняем оригинал (Pillow пересохранит его в правильном формате)
-        img_io = BytesIO()
-        img.save(img_io, format="JPEG", quality=90)
-        # Генерируем безопасное имя с уникальным суффиксом
-        safe_name = f"{uuid.uuid4().hex}.jpg"
-        photo.image.save(safe_name, ContentFile(img_io.getvalue()), save=False)
-
-        # Сохраняем миниатюру
-        safe_thumb_name = f"{uuid.uuid4().hex}.webp"
-        photo.thumbnail.save(safe_thumb_name, thumb_file, save=False)
-
-        photo.save()
-
-        return photo
-    except Exception as exc:
-        raise ServiceOperationError(f"Не удалось обработать фото '{getattr(uploaded_file, 'name', 'unknown')}': {exc}") from exc
-
-
-def add_photos_to_place(place_id, files):
-    photos = []
-    # Находим максимальный sort_order для этого места
-    from django.db.models import Max
-
-    max_order = Photo.objects.filter(place_id=place_id).aggregate(Max("sort_order"))["sort_order__max"] or 0
-
-    for index, file in enumerate(files):
-        try:
-            photo = _process_image(file, place_id, max_order + index + 1)
-        except Exception:
-            for created_photo in photos:
-                try:
-                    delete_photo(created_photo)
-                except Exception:
-                    pass
-            raise
-
-        if photo:
-            photos.append(photo)
-    return photos
-
-
-def delete_photo_files(photo):
-    """Удаляет физические файлы фото с диска."""
-    errors = []
-
-    for field_name in ("image", "thumbnail"):
-        field = getattr(photo, field_name, None)
-        if not field:
-            continue
-
-        try:
-            field.delete(save=False)
-        except Exception as exc:
-            errors.append(f"{field_name}: {exc}")
-
-    if errors:
-        raise ServiceOperationError("; ".join(errors))
-
-
-def delete_photo(photo):
-    """Удаляет фото полностью: сначала файлы, затем запись в БД."""
-    try:
-        delete_photo_files(photo)
-    except Exception as exc:
-        raise ServiceOperationError(f"Не удалось удалить файлы фотографии #{photo.pk}: {exc}") from exc
+def apply_change_request(change_request_id, reviewed_by="system"):
+    change_request = ChangeRequest.objects.get(pk=change_request_id)
+    if change_request.status not in {ChangeRequest.STATUS_PENDING, ChangeRequest.STATUS_APPROVED}:
+        raise ServiceOperationError(f"Заявка #{change_request.pk} не находится в статусе ожидания.")
 
     try:
-        photo.delete()
+        queued_files = _queued_files_from_payload(change_request)
+        payload = change_request.payload or {}
+
+        if change_request.action == ChangeRequest.ACTION_CREATE:
+            place = create_place(
+                title=payload.get("title"),
+                description=payload.get("description") or "",
+                latitude=payload.get("latitude"),
+                longitude=payload.get("longitude"),
+                start_date=payload.get("start_date") or None,
+                end_date=payload.get("end_date") or None,
+                files=queued_files,
+            )
+            change_request.entity_id = place.pk
+
+        elif change_request.action == ChangeRequest.ACTION_UPDATE:
+            place = Place.objects.get(pk=change_request.entity_id)
+            update_place(
+                place,
+                title=payload.get("title"),
+                description=payload.get("description") or "",
+                latitude=payload.get("latitude"),
+                longitude=payload.get("longitude"),
+                start_date=payload.get("start_date") or None,
+                end_date=payload.get("end_date") or None,
+                files=queued_files,
+            )
+
+        elif change_request.action == ChangeRequest.ACTION_DELETE:
+            place = Place.objects.get(pk=change_request.entity_id)
+            delete_place(place)
+
+        else:
+            raise ServiceOperationError(f"Неизвестный тип заявки: {change_request.action}")
+
+        change_request.status = ChangeRequest.STATUS_APPLIED
+        change_request.reviewed_at = timezone.now()
+        change_request.reviewed_by = reviewed_by
+        change_request.error_message = ""
+        change_request.save(update_fields=["status", "entity_id", "reviewed_at", "reviewed_by", "error_message", "updated_at"])
+        _cleanup_temp_directory(change_request)
+        return change_request
+
     except Exception as exc:
-        raise ServiceOperationError(f"Не удалось удалить запись фотографии #{photo.pk}: {exc}") from exc
+        change_request.status = ChangeRequest.STATUS_FAILED
+        change_request.reviewed_at = timezone.now()
+        change_request.reviewed_by = reviewed_by
+        change_request.error_message = str(exc)
+        change_request.save(update_fields=["status", "reviewed_at", "reviewed_by", "error_message", "updated_at"])
+        _cleanup_temp_directory(change_request)
+        raise ServiceOperationError(f"Не удалось применить заявку #{change_request.pk}: {exc}") from exc
 
 
-def delete_photos_for_place(place_id):
-    """Удаляет все фото места (и записи, и файлы). Вызывается перед удалением места."""
-    photos = list(Photo.objects.filter(place_id=place_id))
-    errors = []
-
-    for photo in photos:
-        try:
-            delete_photo(photo)
-        except ServiceOperationError as exc:
-            errors.append(str(exc))
-
-    if errors:
-        raise ServiceOperationError("; ".join(errors))
+def approve_change_request(change_request_id, reviewed_by="system"):
+    change_request = ChangeRequest.objects.get(pk=change_request_id)
+    change_request.status = ChangeRequest.STATUS_APPROVED
+    change_request.reviewed_at = timezone.now()
+    change_request.reviewed_by = reviewed_by
+    change_request.save(update_fields=["status", "reviewed_at", "reviewed_by", "updated_at"])
+    return apply_change_request(change_request.pk, reviewed_by=reviewed_by)
 
 
-# Сохраняем совместимость со старым вызовом delete_photo_files(photo) из представлений.
-# В конечном итоге вся бизнес-логика должна вызываться через этот сервисный слой.
+def build_change_request_message(change_request):
+    lines = [
+        f"Заявка #{change_request.pk}",
+        f"Действие: {change_request.get_action_display()}",
+        f"Сущность: {change_request.get_entity_type_display()}",
+    ]
+
+    payload = change_request.payload or {}
+    if change_request.action == ChangeRequest.ACTION_CREATE:
+        lines.append(f"Название: {payload.get('title', '—')}")
+        lines.append(f"Координаты: {payload.get('latitude', '—')}, {payload.get('longitude', '—')}")
+        files = payload.get("files") or []
+        lines.append(f"Фотографии: {len(files)}")
+    elif change_request.action == ChangeRequest.ACTION_UPDATE:
+        lines.append(f"Место: #{change_request.entity_id}")
+        lines.append(f"Название: {payload.get('title', '—')}")
+    elif change_request.action == ChangeRequest.ACTION_DELETE:
+        lines.append(f"Место: #{change_request.entity_id}")
+
+    lines.append("Подтвердить / Отклонить")
+    return "\n".join(lines)
 
 
-os = os
-settings = settings
+def build_telegram_callback_payload(prefix, change_request_id):
+    return f"{prefix}:{change_request_id}"
 
 
-# Не используем 'os' и 'settings' здесь специально: они нужны только для совместимости и предотвращения
-# ложных предупреждений линтера, но фактическая логика реализована выше.
-
-
-# Legacy aliases for safe imports from existing code.
-# They keep current behavior while centralizing all write operations in service layer.
-
-def delete_photo_by_id(photo_id):
-    photo = Photo.objects.filter(pk=photo_id).first()
-    if photo is None:
-        return False
-    delete_photo(photo)
-    return True
-
-
-# Блок ниже нужен только для соблюдения текущих импортов из views и для уменьшения риска поломки.
-# Все изменения состояния должны происходить через сервисный слой.
-
+# Legacy aliases kept for compatibility with existing code.
+# The queue/apply/reject flow is now centralized here.
 
 __all__ = [
     "ServiceOperationError",
@@ -266,7 +304,13 @@ __all__ = [
     "delete_photo",
     "delete_photos_for_place",
     "delete_photo_by_id",
+    "ChangeRequest",
+    "queue_place_create",
+    "queue_place_update",
+    "queue_place_delete",
+    "approve_change_request",
+    "reject_change_request",
+    "apply_change_request",
+    "build_change_request_message",
+    "build_telegram_callback_payload",
 ]
-
-
-# При загрузке модуля не делаем лишних действий: сервисные функции должны оставаться простыми и явно вызываемыми.

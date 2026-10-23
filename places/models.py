@@ -38,6 +38,7 @@ class Place(models.Model):
                 {"end_date": "Дата окончания не может быть раньше даты начала."}
             )
 
+
 class Photo(models.Model):
     place = models.ForeignKey(
         Place,
@@ -61,3 +62,70 @@ class Photo(models.Model):
 
     def __str__(self):
         return self.original_filename
+
+
+class ChangeRequest(models.Model):
+    ACTION_CREATE = "CREATE"
+    ACTION_UPDATE = "UPDATE"
+    ACTION_DELETE = "DELETE"
+    ACTION_CHOICES = [
+        (ACTION_CREATE, "Создание"),
+        (ACTION_UPDATE, "Изменение"),
+        (ACTION_DELETE, "Удаление"),
+    ]
+
+    ENTITY_PLACE = "place"
+    ENTITY_PHOTO = "photo"
+    ENTITY_CHOICES = [
+        (ENTITY_PLACE, "Место"),
+        (ENTITY_PHOTO, "Фотография"),
+    ]
+
+    STATUS_PENDING = "PENDING"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_APPLIED = "APPLIED"
+    STATUS_FAILED = "FAILED"
+    STATUS_CANCELLED = "CANCELLED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Ожидает подтверждения"),
+        (STATUS_APPROVED, "Подтве��ждена"),
+        (STATUS_REJECTED, "Отклонена"),
+        (STATUS_APPLIED, "Применена"),
+        (STATUS_FAILED, "Ошибка"),
+        (STATUS_CANCELLED, "Отменена"),
+    ]
+
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES, db_index=True)
+    entity_type = models.CharField(max_length=20, choices=ENTITY_CHOICES, default=ENTITY_PLACE, db_index=True)
+    entity_id = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
+    payload = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    temp_storage_path = models.CharField(max_length=500, blank=True, default="")
+    request_hash = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    error_message = models.TextField(blank=True, default="")
+    telegram_chat_id = models.CharField(max_length=50, blank=True, default="")
+    telegram_message_id = models.CharField(max_length=50, blank=True, default="")
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Заявка на изменение"
+        verbose_name_plural = "Заявки на изменение"
+
+    def __str__(self):
+        return f"{self.action}::{self.entity_type}::{self.pk}"
+
+    @property
+    def summary(self):
+        payload = self.payload or {}
+        if self.action == self.ACTION_CREATE:
+            return payload.get("title") or "Создание места"
+        if self.action == self.ACTION_UPDATE:
+            return f"Изменение места #{self.entity_id}"
+        if self.action == self.ACTION_DELETE:
+            return f"Удаление места #{self.entity_id}"
+        return "Заявка"
