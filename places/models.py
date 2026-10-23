@@ -1,6 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 
 class Place(models.Model):
@@ -30,7 +31,9 @@ class Place(models.Model):
     def clean(self):
         super().clean()
         if self.start_date and self.end_date and self.end_date < self.start_date:
-            raise ValidationError({"end_date": "Дата окончания не может быть раньше даты начала."})
+            raise ValidationError(
+                {"end_date": "Дата окончания не может быть раньше даты начала."}
+            )
 
 
 class Photo(models.Model):
@@ -40,8 +43,15 @@ class Photo(models.Model):
         related_name="photos",
         verbose_name="Место",
     )
-    image = models.ImageField(upload_to="places/%Y/%m/%d/originals/", verbose_name="Оригинал")
-    thumbnail = models.ImageField(upload_to="places/%Y/%m/%d/thumbnails/", verbose_name="Миниатюра", blank=True)
+    image = models.ImageField(
+        upload_to="places/%Y/%m/%d/originals/",
+        verbose_name="Оригинал",
+    )
+    thumbnail = models.ImageField(
+        upload_to="places/%Y/%m/%d/thumbnails/",
+        verbose_name="Миниатюра",
+        blank=True,
+    )
     original_filename = models.CharField(max_length=255, verbose_name="Имя файла")
     caption = models.CharField(max_length=255, blank=True, verbose_name="Подпись")
     mime_type = models.CharField(max_length=100, blank=True, verbose_name="MIME-тип")
@@ -62,45 +72,58 @@ class ChangeRequest(models.Model):
     ACTION_CREATE = "CREATE"
     ACTION_UPDATE = "UPDATE"
     ACTION_DELETE = "DELETE"
+
+    ENTITY_PLACE = "place"
+    ENTITY_PHOTO = "photo"
+
+    STATUS_PENDING = "PENDING"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_FAILED = "FAILED"
+
     ACTION_CHOICES = [
         (ACTION_CREATE, "Создание"),
         (ACTION_UPDATE, "Изменение"),
         (ACTION_DELETE, "Удаление"),
     ]
 
-    ENTITY_PLACE = "place"
-    ENTITY_PHOTO = "photo"
     ENTITY_CHOICES = [
         (ENTITY_PLACE, "Место"),
         (ENTITY_PHOTO, "Фотография"),
     ]
 
-    STATUS_PENDING = "PENDING"
-    STATUS_APPROVED = "APPROVED"
-    STATUS_REJECTED = "REJECTED"
-    STATUS_APPLIED = "APPLIED"
-    STATUS_FAILED = "FAILED"
-    STATUS_CANCELLED = "CANCELLED"
     STATUS_CHOICES = [
         (STATUS_PENDING, "Ожидает подтверждения"),
         (STATUS_APPROVED, "Подтверждена"),
         (STATUS_REJECTED, "Отклонена"),
-        (STATUS_APPLIED, "Применена"),
         (STATUS_FAILED, "Ошибка"),
-        (STATUS_CANCELLED, "Отменена"),
     ]
 
-    action = models.CharField(max_length=20, choices=ACTION_CHOICES, db_index=True)
-    entity_type = models.CharField(max_length=20, choices=ENTITY_CHOICES, default=ENTITY_PLACE, db_index=True)
+    action = models.CharField(
+        max_length=20,
+        choices=ACTION_CHOICES,
+        db_index=True,
+    )
+    entity_type = models.CharField(
+        max_length=20,
+        choices=ENTITY_CHOICES,
+        default=ENTITY_PLACE,
+        db_index=True,
+    )
     entity_id = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
     payload = models.JSONField(default=dict, blank=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        db_index=True,
+    )
     temp_storage_path = models.CharField(max_length=500, blank=True, default="")
     request_hash = models.CharField(max_length=128, blank=True, default="", db_index=True)
     error_message = models.TextField(blank=True, default="")
     telegram_chat_id = models.CharField(max_length=50, blank=True, default="")
     telegram_message_id = models.CharField(max_length=50, blank=True, default="")
-    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_at = models.DateTimeField(blank=True, null=True)
     reviewed_by = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -111,16 +134,18 @@ class ChangeRequest(models.Model):
         verbose_name_plural = "Заявки на изменение"
 
     def __str__(self):
-        return f"{self.action}::{self.entity_type}::{self.pk}"
+        return f"{self.get_action_display()}::{self.entity_type}::{self.pk}"
 
     @property
+    def action_label(self):
+        return self.get_action_display()
+
     def summary(self):
         payload = self.payload or {}
         if self.action == self.ACTION_CREATE:
-            return payload.get("title") or "Создание места"
+            return payload.get("title") or "Создание"
         if self.action == self.ACTION_UPDATE:
-            return f"Изменение места #{self.entity_id}"
+            return payload.get("title") or f"Обновление #{self.entity_id}"
         if self.action == self.ACTION_DELETE:
-            return f"Удаление места #{self.entity_id}"
-        return "Заявка"
-
+            return payload.get("title") or f"Удаление #{self.entity_id}"
+        return "Изменение"

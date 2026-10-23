@@ -6,15 +6,18 @@ from django.views.decorators.http import require_POST
 
 from . import auth
 from .forms import PlaceForm, LoginForm
-from .models import ChangeRequest, Place, Photo
+from .models import Photo, Place
 from .services import (
     ServiceOperationError,
     add_photos_to_place,
-    approve_change_request,
     create_place,
     delete_photo,
+    delete_photo_files,
     delete_place,
-    reject_change_request,
+    queue_photo_delete,
+    queue_place_create,
+    queue_place_delete,
+    queue_place_update,
     serialize_place,
     update_place,
 )
@@ -22,6 +25,16 @@ from .services import (
 
 def _place_url_template(name):
     return reverse(f"places:{name}", kwargs={"pk": 0}).replace("/0/", "/{pk}/")
+
+
+def _telegram_enabled():
+    return bool(getattr(__import__("django.conf").conf.settings, "TELEGRAM_BOT_TOKEN", "").strip()) and bool(
+        str(getattr(__import__("django.conf").conf.settings, "TELEGRAM_ADMIN_CHAT_ID", "")).strip()
+    )
+
+
+def _json_errors(form):
+    return JsonResponse({"ok": False, "errors": form.errors.get_json_data()}, status=400)
 
 
 def map_view(request):
@@ -39,32 +52,42 @@ def map_view(request):
     )
 
 
-def _json_errors(form):
-    return JsonResponse({"ok": False, "errors": form.errors.get_json_data()}, status=400)
-
-
-def _json_service_error(exc, status=400):
-    return JsonResponse({"ok": False, "error": str(exc)}, status=status)
-
-
 @require_POST
 def place_create(request):
     form = PlaceForm(request.POST)
     if not form.is_valid():
         return _json_errors(form)
 
-    try:
-        place = create_place(**form.cleaned_data)
-    except ServiceOperationError as exc:
-        return _json_service_error(exc, 500)
-
     files = request.FILES.getlist("photos")
-    if files:
-        try:
-            add_photos_to_place(place.id, files)
-        except ServiceOperationError as exc:
-            return _json_service_error(exc, 500)
 
+    if _telegram_enabled():
+        queue = queue_place_create(
+            title=form.cleaned_data["title"],
+            description=form.cleaned_data.get("description") or "",
+            latitude=form.cleaned_data["latitude"],
+            longitude=form.cleaned_data["longitude"],
+            start_date=form.cleaned_data.get("start_date"),
+            end_date=form.cleaned_data.get("end_date"),
+            files=files,
+        )
+        return JsonResponse(
+            {
+                "ok": True,
+                "status": "pending",
+                "change_request_id": queue.pk,
+                "message": "Изменение отправлено на подтверждение в Telegram.",
+            }
+        )
+
+    place = create_place(
+        title=form.cleaned_data["title"],
+        description=form.cleaned_data.get("description") or "",
+        latitude=form.cleaned_data["latitude"],
+        longitude=form.cleaned_data["longitude"],
+        start_date=form.cleaned_data.get("start_date"),
+        end_date=form.cleaned_data.get("end_date"),
+        files=files,
+    )
     return JsonResponse({"ok": True, "place": serialize_place(place)})
 
 
@@ -75,28 +98,57 @@ def place_update(request, pk):
     if not form.is_valid():
         return _json_errors(form)
 
-    try:
-        place = update_place(place, **form.cleaned_data)
-    except ServiceOperationError as exc:
-        return _json_service_error(exc, 500)
-
     files = request.FILES.getlist("photos")
-    if files:
-        try:
-            add_photos_to_place(place.id, files)
-        except ServiceOperationError as exc:
-            return _json_service_error(exc, 500)
 
+    if _telegram_enabled():
+        queue = queue_place_update(
+            place,
+            title=form.cleaned_data["title"],
+            description=form.cleaned_data.get("description") or "",
+            latitude=form.cleaned_data["latitude"],
+            longitude=form.cleaned_data["longitude"],
+            start_date=form.cleaned_data.get("start_date"),
+            end_date=form.cleaned_data.get("end_date"),
+            files=files,
+        )
+        return JsonResponse(
+            {
+                "ok": True,
+                "status": "pending",
+                "change_request_id": queue.pk,
+                "message": "Изменение отправлено на подтверждение в Telegram.",
+            }
+        )
+
+    place = update_place(
+        place,
+        title=form.cleaned_data["title"],
+        description=form.cleaned_data.get("description") or "",
+        latitude=form.cleaned_data["latitude"],
+        longitude=form.cleaned_data["longitude"],
+        start_date=form.cleaned_data.get("start_date"),
+        end_date=form.cleaned_data.get("end_date"),
+        files=files,
+    )
     return JsonResponse({"ok": True, "place": serialize_place(place)})
 
 
 @require_POST
 def place_delete(request, pk):
     place = get_object_or_404(Place, pk=pk)
-    try:
-        delete_place(place)
-    except ServiceOperationError as exc:
-        return _json_service_error(exc, 500)
+
+    if _telegram_enabled():
+        queue = queue_place_delete(place)
+        return JsonResponse(
+            {
+                "ok": True,
+                "status": "pending",
+                "change_request_id": queue.pk,
+                "message": "Удаление отправлено на подтверждение в Telegram.",
+            }
+        )
+
+    delete_place(place)
     return JsonResponse({"ok": True, "id": pk})
 
 
@@ -125,32 +177,20 @@ def serve_photo(request, pk, file_type):
 @require_POST
 def photo_delete(request, pk):
     photo = get_object_or_404(Photo, pk=pk)
-    place_id = photo.place.id
-    try:
-        delete_photo(photo)
-    except ServiceOperationError as exc:
-        return _json_service_error(exc, 500)
-    return JsonResponse({"ok": True, "place_id": place_id})
 
+    if _telegram_enabled():
+        queue = queue_photo_delete(photo)
+        return JsonResponse(
+            {
+                "ok": True,
+                "status": "pending",
+                "change_request_id": queue.pk,
+                "message": "Удаление фотографии отправлено на подтверждение в Telegram.",
+            }
+        )
 
-@require_POST
-def change_request_approve(request, pk):
-    change_request = get_object_or_404(ChangeRequest, pk=pk)
-    try:
-        approve_change_request(change_request.pk, reviewed_by="admin")
-    except ServiceOperationError as exc:
-        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
-    return JsonResponse({"ok": True, "status": "approved", "id": pk})
-
-
-@require_POST
-def change_request_reject(request, pk):
-    change_request = get_object_or_404(ChangeRequest, pk=pk)
-    try:
-        reject_change_request(change_request.pk, reviewed_by="admin")
-    except ServiceOperationError as exc:
-        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
-    return JsonResponse({"ok": True, "status": "rejected", "id": pk})
+    delete_photo(photo)
+    return JsonResponse({"ok": True, "place_id": photo.place_id})
 
 
 def login_view(request):
