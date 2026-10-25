@@ -1,7 +1,6 @@
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.utils import timezone
 
 
 class Place(models.Model):
@@ -110,7 +109,11 @@ class ChangeRequest(models.Model):
         default=ENTITY_PLACE,
         db_index=True,
     )
-    entity_id = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
+    entity_id = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        db_index=True,
+    )
     payload = models.JSONField(default=dict, blank=True)
     status = models.CharField(
         max_length=20,
@@ -123,7 +126,7 @@ class ChangeRequest(models.Model):
     error_message = models.TextField(blank=True, default="")
     telegram_chat_id = models.CharField(max_length=50, blank=True, default="")
     telegram_message_id = models.CharField(max_length=50, blank=True, default="")
-    reviewed_at = models.DateTimeField(blank=True, null=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
     reviewed_by = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -134,18 +137,4 @@ class ChangeRequest(models.Model):
         verbose_name_plural = "Заявки на изменение"
 
     def __str__(self):
-        return f"{self.get_action_display()}::{self.entity_type}::{self.pk}"
-
-    @property
-    def action_label(self):
-        return self.get_action_display()
-
-    def summary(self):
-        payload = self.payload or {}
-        if self.action == self.ACTION_CREATE:
-            return payload.get("title") or "Создание"
-        if self.action == self.ACTION_UPDATE:
-            return payload.get("title") or f"Обновление #{self.entity_id}"
-        if self.action == self.ACTION_DELETE:
-            return payload.get("title") or f"Удаление #{self.entity_id}"
-        return "Изменение"
+        return f"ChangeRequest #{self.pk}: {self.get_action_display()} / {self.get_status_display()}"

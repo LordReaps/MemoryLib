@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.http import JsonResponse, Http404, FileResponse
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse
@@ -9,15 +10,15 @@ from .forms import PlaceForm, LoginForm
 from .models import Photo, Place
 from .services import (
     ServiceOperationError,
-    add_photos_to_place,
+    approve_change_request,
     create_place,
     delete_photo,
-    delete_photo_files,
     delete_place,
     queue_photo_delete,
     queue_place_create,
     queue_place_delete,
     queue_place_update,
+    reject_change_request,
     serialize_place,
     update_place,
 )
@@ -28,9 +29,9 @@ def _place_url_template(name):
 
 
 def _telegram_enabled():
-    return bool(getattr(__import__("django.conf").conf.settings, "TELEGRAM_BOT_TOKEN", "").strip()) and bool(
-        str(getattr(__import__("django.conf").conf.settings, "TELEGRAM_ADMIN_CHAT_ID", "")).strip()
-    )
+    # return bool(getattr(settings, "TELEGRAM_BOT_TOKEN", "").strip()) and bool(
+    #    str(getattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "")).strip())
+    return False
 
 
 def _json_errors(form):
@@ -152,6 +153,38 @@ def place_delete(request, pk):
     return JsonResponse({"ok": True, "id": pk})
 
 
+@require_POST
+def change_request_approve(request, pk):
+    try:
+        change_request = approve_change_request(pk, reviewed_by="web")
+    except ServiceOperationError as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "status": change_request.status,
+            "change_request_id": pk,
+        }
+    )
+
+
+@require_POST
+def change_request_reject(request, pk):
+    try:
+        change_request = reject_change_request(pk, reviewed_by="web")
+    except ServiceOperationError as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "status": change_request.status,
+            "change_request_id": pk,
+        }
+    )
+
+
 def serve_photo(request, pk, file_type):
     if not request.session.get("authenticated"):
         raise Http404
@@ -189,7 +222,14 @@ def photo_delete(request, pk):
             }
         )
 
-    delete_photo(photo)
+    try:
+        delete_photo(photo)
+    except Exception:
+        return JsonResponse(
+            {"ok": False, "errors": {"__all__": ["Не удалось удалить фотографию. Попробуйте ещё раз."]}},
+            status=400,
+        )
+
     return JsonResponse({"ok": True, "place_id": photo.place_id})
 
 

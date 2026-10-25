@@ -632,50 +632,62 @@
   };
 
   form.addEventListener("submit", function (event) {
-    event.preventDefault();
-    clearErrors();
+      event.preventDefault();
+      clearErrors();
 
-    const isEdit = Boolean(placeIdInput.value);
-    const url = isEdit
-      ? urlFor(updateUrlTemplate, placeIdInput.value)
-      : createUrl;
+      const isEdit = Boolean(placeIdInput.value);
+      const url = isEdit
+        ? urlFor(updateUrlTemplate, placeIdInput.value)
+        : createUrl;
 
-    const formData = new FormData(form);
-    formData.delete("photos");
-    selectedFiles.forEach(function (file) {
-      formData.append("photos", file);
-    });
-
-    fetch(url, {
-      method: "POST",
-      body: formData,
-      headers: { "X-Requested-With": "XMLHttpRequest" },
-    })
-      .then(function (response) {
-        return response.json().then(function (data) {
-          return { ok: response.ok, data: data };
-        });
-      })
-      .then(function (result) {
-        if (!result.ok) {
-          showErrors(result.data.errors || { __all__: [{ message: "Ошибка сохранения" }] });
-          return;
-        }
-        const place = result.data.place;
-        if (isEdit) {
-          refreshMarker(place, true);
-        } else {
-          addPlaceMarker(place, true);
-        }
-        pickHint.textContent =
-          "Нажмите на карту, чтобы выбрать точку. Затем можно сдвинуть флажок.";
-        closeForm();
-        resetForm();
-      })
-      .catch(function () {
-        showErrors({ __all__: [{ message: "Не удалось сохранить место" }] });
+      const formData = new FormData(form);
+      formData.delete("photos");
+      selectedFiles.forEach(function (file) {
+        formData.append("photos", file);
       });
-  });
+
+      fetch(url, {
+        method: "POST",
+        body: formData,
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+      })
+        .then(function (response) {
+          return response.json().then(function (data) {
+            return { ok: response.ok, data: data };
+          });
+        })
+        .then(function (result) {
+          if (!result.ok) {
+            showErrors(result.data.errors || { __all__: [{ message: "Ошибка сохранения" }] });
+            return;
+          }
+
+          // НОВОЕ: обработка pending-статуса
+          if (result.data.status === "pending") {
+            formErrors.textContent = result.data.message || "Изменение отправлено на подтверждение.";
+            formErrors.hidden = false;
+            closeForm();
+            resetForm();
+            return;
+          }
+
+          // Старая логика только для обычного сохранения
+          const place = result.data.place;
+          if (isEdit) {
+            refreshMarker(place, true);
+          } else {
+            addPlaceMarker(place, true);
+          }
+
+          pickHint.textContent =
+            "Нажмите на карту, чтобы выбрать точку. Затем можно сдвинуть флажок.";
+          closeForm();
+          resetForm();
+        })
+        .catch(function () {
+          showErrors({ __all__: [{ message: "Не удалось сохранить место" }] });
+        });
+    });
 
   function showLightboxPhoto() {
     const photo = lightboxPhotos[lightboxIndex];

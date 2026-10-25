@@ -4,18 +4,15 @@ from django.conf import settings
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes
 
-from .models import ChangeRequest
-from .services import (
-    approve_change_request,
-    build_change_request_message,
-    reject_change_request,
-)
+from places.models import ChangeRequest
+from places.services import approve_change_request, build_change_request_message, reject_change_request
+
 
 logger = logging.getLogger(__name__)
 
 
 def _bot_token():
-    return (getattr(settings, "TELEGRAM_BOT_TOKEN", "") or "").strip()
+    return getattr(settings, "TELEGRAM_BOT_TOKEN", "") or ""
 
 
 def _admin_chat_id():
@@ -28,18 +25,31 @@ def _admin_chat_id():
         return None
 
 
-def _telegram_ready():
-    return bool(_bot_token()) and _admin_chat_id() is not None
+def _pending_requests():
+    return ChangeRequest.objects.filter(status=ChangeRequest.STATUS_PENDING).order_by("created_at")
+
+
+def _keyboard_for_request(change_request):
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data=f"approve:{change_request.pk}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{change_request.pk}"),
+            ]
+        ]
+    )
 
 
 async def send_pending_requests(context: ContextTypes.DEFAULT_TYPE):
-    if not _telegram_ready():
+    token = _bot_token()
+    if not token:
         return
 
     admin_chat_id = _admin_chat_id()
-    pending_requests = ChangeRequest.objects.filter(status=ChangeRequest.STATUS_PENDING).order_by("created_at")
+    if admin_chat_id is None:
+        return
 
-    for request in pending_requests:
+    for request in _pending_requests():
         if request.telegram_message_id and request.telegram_chat_id == str(admin_chat_id):
             continue
 
@@ -48,14 +58,7 @@ async def send_pending_requests(context: ContextTypes.DEFAULT_TYPE):
             chat_id=admin_chat_id,
             text=text,
             disable_web_page_preview=True,
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("✅ Подтвердить", callback_data=f"approve:{request.pk}"),
-                        InlineKeyboardButton("❌ Отклонить", callback_data=f"reject:{request.pk}"),
-                    ]
-                ]
-            ),
+            reply_markup=_keyboard_for_request(request),
         )
 
         request.telegram_chat_id = str(admin_chat_id)
@@ -83,7 +86,7 @@ async def handle_callback(update, context):
     if prefix == "approve":
         try:
             approve_change_request(request_id, reviewed_by="telegram")
-            await query.answer("✅ Заявка подтверждена", show_alert=True)
+            await query.answer("Заявка подтверждена", show_alert=True)
         except Exception as exc:
             await query.answer(f"Ошибка: {exc}", show_alert=True)
         return
@@ -91,7 +94,7 @@ async def handle_callback(update, context):
     if prefix == "reject":
         try:
             reject_change_request(request_id, reviewed_by="telegram")
-            await query.answer("❌ Заявка отклонена", show_alert=True)
+            await query.answer("Заявка отклонена", show_alert=True)
         except Exception as exc:
             await query.answer(f"Ошибка: {exc}", show_alert=True)
         return

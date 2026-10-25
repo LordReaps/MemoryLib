@@ -58,26 +58,33 @@ def _build_place(**fields):
 @transaction.atomic
 def create_place(**fields):
     uploaded_files = fields.pop("files", [])
+
     place = _build_place(**fields)
     place.save()
+
     if uploaded_files:
         add_photos_to_place(place.id, uploaded_files)
+
     return place
 
 
 @transaction.atomic
 def update_place(place, **fields):
     uploaded_files = fields.pop("files", [])
+
     place.title = fields["title"]
     place.description = fields.get("description") or ""
     place.latitude = fields["latitude"]
     place.longitude = fields["longitude"]
     place.start_date = fields.get("start_date")
     place.end_date = fields.get("end_date")
+
     place.full_clean()
     place.save()
+
     if uploaded_files:
         add_photos_to_place(place.id, uploaded_files)
+
     return place
 
 
@@ -121,6 +128,7 @@ def _process_image(uploaded_file, place_id, sort_order):
 
         photo.save()
         return photo
+
     except Exception:
         if photo is not None:
             try:
@@ -137,8 +145,6 @@ def _process_image(uploaded_file, place_id, sort_order):
 def add_photos_to_place(place_id, files):
     created_photos = []
     try:
-        from django.db.models import Max
-
         max_order = Photo.objects.filter(place_id=place_id).aggregate(Max("sort_order"))["sort_order__max"] or 0
 
         for index, file in enumerate(files):
@@ -147,6 +153,7 @@ def add_photos_to_place(place_id, files):
                 created_photos.append(photo)
 
         return created_photos
+
     except Exception:
         for photo in created_photos:
             try:
@@ -201,9 +208,11 @@ def _cleanup_change_request_dir(change_request):
     storage_path = getattr(change_request, "temp_storage_path", "") or ""
     if not storage_path:
         return
+
     path = Path(storage_path)
     if path.exists():
         shutil.rmtree(path, ignore_errors=True)
+
     change_request.temp_storage_path = ""
     change_request.save(update_fields=["temp_storage_path"])
 
@@ -233,7 +242,8 @@ def _save_queued_files(change_request, uploaded_files):
             {
                 "stored_name": safe_name,
                 "original_name": original_name,
-                "mime_type": getattr(uploaded_file, "content_type", "application/octet-stream") or "application/octet-stream",
+                "mime_type": getattr(uploaded_file, "content_type", "application/octet-stream")
+                or "application/octet-stream",
                 "size_bytes": len(content),
             }
         )
@@ -241,6 +251,7 @@ def _save_queued_files(change_request, uploaded_files):
     change_request.temp_storage_path = str(request_dir)
     change_request.payload["files"] = saved
     change_request.save(update_fields=["temp_storage_path", "payload"])
+
     return saved
 
 
@@ -257,9 +268,11 @@ def _load_queued_files(change_request):
         stored_name = item.get("stored_name")
         if not stored_name:
             continue
+
         file_path = files_dir / stored_name
         if not file_path.exists():
             continue
+
         result.append(
             File(
                 file_path.open("rb"),
@@ -272,6 +285,7 @@ def _load_queued_files(change_request):
 
 def _queue_request(action, entity_type, entity_id, payload, uploaded_files=None):
     payload = payload or {}
+
     change_request = ChangeRequest.objects.create(
         action=action,
         entity_type=entity_type,
@@ -390,10 +404,6 @@ def _apply_pending_action(change_request, reviewed_by):
     files = _load_queued_files(change_request)
 
     if change_request.action == ChangeRequest.ACTION_CREATE:
-        if "place_id" in payload:
-            # Это уже существующее место, но для ACTION_CREATE такого быть не должно
-            pass
-
         place = create_place(
             title=payload.get("title") or "",
             description=payload.get("description") or "",
@@ -438,7 +448,7 @@ def _apply_pending_action(change_request, reviewed_by):
 def approve_change_request(change_request_id, reviewed_by="system"):
     change_request = ChangeRequest.objects.get(pk=change_request_id)
 
-    if change_request.status not in {ChangeRequest.STATUS_PENDING}:
+    if change_request.status != ChangeRequest.STATUS_PENDING:
         raise ServiceOperationError(
             f"Заявка #{change_request.pk} уже обработана: {change_request.status}"
         )
@@ -464,6 +474,7 @@ def approve_change_request(change_request_id, reviewed_by="system"):
 
 def reject_change_request(change_request_id, reviewed_by="system"):
     change_request = ChangeRequest.objects.get(pk=change_request_id)
+
     if change_request.status != ChangeRequest.STATUS_PENDING:
         raise ServiceOperationError(
             f"Заявка #{change_request.pk} уже обработана: {change_request.status}"
