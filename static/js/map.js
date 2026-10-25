@@ -10,6 +10,7 @@
 
   const addButton = document.getElementById("add-place-btn");
   const pickHint = document.getElementById("pick-hint");
+  const placeStatus = document.getElementById("place-status");
   const form = document.getElementById("place-form");
   const formTitle = document.getElementById("place-form-title");
   const formErrors = document.getElementById("place-form-errors");
@@ -345,6 +346,7 @@
     closeSheet();
     closeForm();
     resetForm();
+    placeStatus.hidden = true;
     map.closePopup();
     pickingPoint = true;
     pickHint.textContent =
@@ -362,6 +364,7 @@
     closeSheet();
     closeForm();
     resetForm();
+    placeStatus.hidden = true;
     map.closePopup();
 
     editingPlaceId = placeId;
@@ -664,10 +667,10 @@
 
           // НОВОЕ: обработка pending-статуса
           if (result.data.status === "pending") {
-            formErrors.textContent = result.data.message || "Изменение отправлено на подтверждение.";
-            formErrors.hidden = false;
             closeForm();
             resetForm();
+            placeStatus.textContent = result.data.message || "Изменение отправлено на рассмотрение.";
+            placeStatus.hidden = false;
             return;
           }
 

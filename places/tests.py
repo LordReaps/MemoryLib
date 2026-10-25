@@ -2,7 +2,10 @@ import os
 import shutil
 import tempfile
 from io import BytesIO
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -11,8 +14,17 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from PIL import Image
 
-from .models import Photo, Place
-from .services import create_place, delete_photo, delete_place, update_place
+from .models import ChangeRequest, Photo, Place
+from .services import (
+    approve_change_request,
+    build_change_request_message,
+    create_place,
+    delete_photo,
+    delete_place,
+    queue_place_update,
+    update_place,
+)
+from .telegram_bot import _prepare_telegram_photo, _request_photos, send_pending_requests
 
 
 class AuthenticatedTestCase(TestCase):
@@ -135,6 +147,7 @@ class MapViewTests(AuthenticatedTestCase):
         self.assertContains(response, 'id="photo-preview"')
 
 
+@override_settings(ENABLE_TG_CONFIRMATION=False)
 class PlaceViewTests(AuthenticatedTestCase):
     def test_create_place_via_post(self):
         response = self.client.post(
@@ -209,6 +222,181 @@ class PlaceViewTests(AuthenticatedTestCase):
     def test_create_rejects_get(self):
         response = self.client.get(reverse("places:place_create"))
         self.assertEqual(response.status_code, 405)
+
+
+@override_settings(
+    ENABLE_TG_CONFIRMATION=True,
+    TELEGRAM_BOT_TOKEN="test-token",
+    TELEGRAM_ADMIN_CHAT_ID="12345",
+)
+class PlaceApprovalViewTests(AuthenticatedTestCase):
+    def test_create_is_queued_until_approved(self):
+        response = self.client.post(
+            reverse("places:place_create"),
+            {
+                "title": "Лиссабон",
+                "description": "Океан",
+                "latitude": "38.7223",
+                "longitude": "-9.1393",
+                "start_date": "2023-05-01",
+                "end_date": "2023-05-05",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["status"], "pending")
+        self.assertIn("рассмотрение", data["message"])
+        self.assertEqual(Place.objects.count(), 0)
+
+        change_request = ChangeRequest.objects.get(pk=data["change_request_id"])
+        self.assertEqual(change_request.payload["start_date"], "2023-05-01")
+        self.assertEqual(change_request.payload["end_date"], "2023-05-05")
+
+        approve_change_request(change_request.pk, reviewed_by="test")
+        place = Place.objects.get()
+        self.assertEqual(place.title, "Лиссабон")
+        self.assertEqual(place.start_date.isoformat(), "2023-05-01")
+        self.assertEqual(place.end_date.isoformat(), "2023-05-05")
+
+    def test_update_is_queued_until_approved(self):
+        place = create_place(
+            title="Лиссабон",
+            latitude=38.72,
+            longitude=-9.14,
+        )
+
+        response = self.client.post(
+            reverse("places:place_update", kwargs={"pk": place.pk}),
+            {
+                "title": "Лиссабон центр",
+                "description": "Площадь",
+                "latitude": "38.713",
+                "longitude": "-9.139",
+                "start_date": "2023-05-01",
+                "end_date": "2023-05-05",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["status"], "pending")
+        place.refresh_from_db()
+        self.assertEqual(place.title, "Лиссабон")
+
+        approve_change_request(data["change_request_id"], reviewed_by="test")
+        place.refresh_from_db()
+        self.assertEqual(place.title, "Лиссабон центр")
+        self.assertEqual(place.start_date.isoformat(), "2023-05-01")
+        self.assertEqual(place.end_date.isoformat(), "2023-05-05")
+
+    def test_telegram_message_has_requested_fields_and_order(self):
+        change_request = ChangeRequest.objects.create(
+            action=ChangeRequest.ACTION_CREATE,
+            entity_type=ChangeRequest.ENTITY_PLACE,
+            payload={
+                "title": "Лиссабон",
+                "description": "Вид на океан",
+            },
+        )
+
+        message = build_change_request_message(change_request, file_count=2)
+
+        self.assertEqual(
+            message.splitlines(),
+            [
+                "Пришло изменение",
+                f"#{change_request.pk}",
+                "Создание",
+                "entity: place",
+                "title: Лиссабон",
+                "Описание: Вид на океан",
+                "Количество файлов: 2",
+            ],
+        )
+
+
+class TelegramPhotoTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        self.media_dir = tempfile.mkdtemp()
+        self.override = override_settings(MEDIA_ROOT=self.media_dir)
+        self.override.enable()
+
+    def tearDown(self):
+        self.override.disable()
+        shutil.rmtree(self.media_dir, ignore_errors=True)
+        super().tearDown()
+
+    def _image_upload(self, name, image_format):
+        buffer = BytesIO()
+        Image.new("RGB", (2, 2), "blue").save(buffer, format=image_format)
+        content_type = "image/png" if image_format == "PNG" else "image/jpeg"
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type=content_type)
+
+    def test_update_notification_includes_existing_and_new_photos(self):
+        place = create_place(
+            title="Рим",
+            latitude=41.9,
+            longitude=12.5,
+            files=[self._image_upload("existing.jpg", "JPEG")],
+        )
+        change_request = queue_place_update(
+            place,
+            title="Рим",
+            description="",
+            latitude=41.9,
+            longitude=12.5,
+            files=[self._image_upload("new.png", "PNG")],
+        )
+
+        photos = _request_photos(change_request)
+
+        self.assertEqual([name for name, _ in photos], ["existing.jpg", "new.png"])
+        self.assertEqual(len(photos), 2)
+        self.assertTrue(all(content for _, content in photos))
+
+    def test_telegram_photo_is_normalized_to_jpeg(self):
+        upload = self._image_upload("upload.png", "PNG")
+
+        filename, content = _prepare_telegram_photo(upload.name, upload.read())
+
+        self.assertEqual(filename, "upload.jpg")
+        with Image.open(BytesIO(content)) as image:
+            self.assertEqual(image.format, "JPEG")
+
+    def test_already_notified_request_sends_photos_as_reply(self):
+        place = create_place(
+            title="Рим",
+            latitude=41.9,
+            longitude=12.5,
+            files=[self._image_upload("existing.jpg", "JPEG")],
+        )
+        change_request = queue_place_update(
+            place,
+            title="Рим",
+            description="",
+            latitude=41.9,
+            longitude=12.5,
+        )
+        change_request.telegram_chat_id = "12345"
+        change_request.telegram_message_id = "67890"
+        change_request.save(update_fields=["telegram_chat_id", "telegram_message_id"])
+
+        bot = SimpleNamespace(send_photo=AsyncMock(), send_media_group=AsyncMock())
+        context = SimpleNamespace(bot=bot)
+        with override_settings(
+            TELEGRAM_BOT_TOKEN="test-token",
+            TELEGRAM_ADMIN_CHAT_ID="12345",
+        ):
+            async_to_sync(send_pending_requests)(context)
+
+        bot.send_photo.assert_awaited_once()
+        self.assertEqual(bot.send_photo.await_args.kwargs["reply_to_message_id"], 67890)
+        change_request.refresh_from_db()
+        self.assertTrue(change_request.telegram_photos_sent)
 
 
 class AuthTests(TestCase):

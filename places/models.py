@@ -126,6 +126,7 @@ class ChangeRequest(models.Model):
     error_message = models.TextField(blank=True, default="")
     telegram_chat_id = models.CharField(max_length=50, blank=True, default="")
     telegram_message_id = models.CharField(max_length=50, blank=True, default="")
+    telegram_photos_sent = models.BooleanField(default=False)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     reviewed_by = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)

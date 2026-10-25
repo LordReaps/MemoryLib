@@ -1,6 +1,7 @@
 import json
 import shutil
 import uuid
+from datetime import date
 from io import BytesIO
 from pathlib import Path
 
@@ -221,6 +222,16 @@ def _request_hash_for_payload(payload):
     return uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(payload, sort_keys=True, ensure_ascii=False)).hex
 
 
+def _payload_date(value):
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def _date_from_payload(value):
+    return date.fromisoformat(value) if value else None
+
+
 def _save_queued_files(change_request, uploaded_files):
     if not uploaded_files:
         return []
@@ -309,8 +320,8 @@ def queue_place_create(**fields):
         "description": fields.get("description") or "",
         "latitude": fields.get("latitude"),
         "longitude": fields.get("longitude"),
-        "start_date": fields.get("start_date"),
-        "end_date": fields.get("end_date"),
+        "start_date": _payload_date(fields.get("start_date")),
+        "end_date": _payload_date(fields.get("end_date")),
     }
     return _queue_request(
         action=ChangeRequest.ACTION_CREATE,
@@ -329,8 +340,8 @@ def queue_place_update(place, **fields):
         "description": fields.get("description") or "",
         "latitude": fields.get("latitude"),
         "longitude": fields.get("longitude"),
-        "start_date": fields.get("start_date"),
-        "end_date": fields.get("end_date"),
+        "start_date": _payload_date(fields.get("start_date")),
+        "end_date": _payload_date(fields.get("end_date")),
     }
     return _queue_request(
         action=ChangeRequest.ACTION_UPDATE,
@@ -371,30 +382,27 @@ def queue_photo_delete(photo):
     )
 
 
-def build_change_request_message(change_request):
+def build_change_request_message(change_request, file_count=None):
     payload = change_request.payload or {}
     action_label = change_request.get_action_display()
 
     parts = [
+        "Пришло изменение",
         f"#{change_request.pk}",
         action_label,
         f"entity: {change_request.entity_type}",
     ]
 
-    if change_request.action == ChangeRequest.ACTION_CREATE:
+    if change_request.entity_type == ChangeRequest.ENTITY_PLACE:
         parts.append(f"title: {payload.get('title') or '—'}")
-    elif change_request.action == ChangeRequest.ACTION_UPDATE:
-        parts.append(f"place_id: {change_request.entity_id}")
-        parts.append(f"title: {payload.get('title') or '—'}")
+        parts.append(f"Описание: {payload.get('description') or '—'}")
     elif change_request.action == ChangeRequest.ACTION_DELETE:
         parts.append(f"entity_id: {change_request.entity_id}")
-        if change_request.entity_type == ChangeRequest.ENTITY_PLACE:
-            parts.append(f"title: {payload.get('title') or '—'}")
-        else:
-            parts.append(f"filename: {payload.get('original_filename') or '—'}")
+        parts.append(f"filename: {payload.get('original_filename') or '—'}")
 
-    if payload.get("files"):
-        parts.append(f"files: {len(payload.get('files'))}")
+    if file_count is None:
+        file_count = len(payload.get("files") or [])
+    parts.append(f"Количество файлов: {file_count}")
 
     return "\n".join(parts)
 
@@ -409,8 +417,8 @@ def _apply_pending_action(change_request, reviewed_by):
             description=payload.get("description") or "",
             latitude=payload.get("latitude"),
             longitude=payload.get("longitude"),
-            start_date=payload.get("start_date"),
-            end_date=payload.get("end_date"),
+            start_date=_date_from_payload(payload.get("start_date")),
+            end_date=_date_from_payload(payload.get("end_date")),
             files=files,
         )
         change_request.entity_id = place.pk
@@ -425,8 +433,8 @@ def _apply_pending_action(change_request, reviewed_by):
             description=payload.get("description") or "",
             latitude=payload.get("latitude"),
             longitude=payload.get("longitude"),
-            start_date=payload.get("start_date"),
-            end_date=payload.get("end_date"),
+            start_date=_date_from_payload(payload.get("start_date")),
+            end_date=_date_from_payload(payload.get("end_date")),
             files=files,
         )
         return place

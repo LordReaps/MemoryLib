@@ -1,3 +1,5 @@
+import logging
+
 from django.conf import settings
 from django.http import JsonResponse, Http404, FileResponse
 from django.shortcuts import get_object_or_404, render, redirect
@@ -23,15 +25,23 @@ from .services import (
     update_place,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _place_url_template(name):
     return reverse(f"places:{name}", kwargs={"pk": 0}).replace("/0/", "/{pk}/")
 
 
+def _telegram_configuration():
+    return (
+        bool(getattr(settings, "ENABLE_TG_CONFIRMATION", False)),
+        bool(str(getattr(settings, "TELEGRAM_BOT_TOKEN", "")).strip()),
+        bool(str(getattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "")).strip()),
+    )
+
+
 def _telegram_enabled():
-    # return bool(getattr(settings, "TELEGRAM_BOT_TOKEN", "").strip()) and bool(
-    #    str(getattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "")).strip())
-    return False
+    return all(_telegram_configuration())
 
 
 def _json_errors(form):
@@ -57,11 +67,21 @@ def map_view(request):
 def place_create(request):
     form = PlaceForm(request.POST)
     if not form.is_valid():
+        logger.warning("Place create rejected: invalid form: %s", form.errors.get_json_data())
         return _json_errors(form)
 
     files = request.FILES.getlist("photos")
+    telegram_configuration = _telegram_configuration()
+    telegram_enabled = all(telegram_configuration)
+    logger.info(
+        "Place create requested: telegram_enabled=%s, confirmation_enabled=%s, "
+        "token_configured=%s, admin_chat_configured=%s, photos=%d",
+        telegram_enabled,
+        *telegram_configuration,
+        len(files),
+    )
 
-    if _telegram_enabled():
+    if telegram_enabled:
         queue = queue_place_create(
             title=form.cleaned_data["title"],
             description=form.cleaned_data.get("description") or "",
@@ -71,12 +91,13 @@ def place_create(request):
             end_date=form.cleaned_data.get("end_date"),
             files=files,
         )
+        logger.info("Place create queued for review: change_request_id=%s", queue.pk)
         return JsonResponse(
             {
                 "ok": True,
                 "status": "pending",
                 "change_request_id": queue.pk,
-                "message": "Изменение отправлено на подтверждение в Telegram.",
+                "message": "Изменение отправлено на рассмотрение.",
             }
         )
 
@@ -89,6 +110,7 @@ def place_create(request):
         end_date=form.cleaned_data.get("end_date"),
         files=files,
     )
+    logger.info("Place created immediately: place_id=%s", place.pk)
     return JsonResponse({"ok": True, "place": serialize_place(place)})
 
 
@@ -97,11 +119,26 @@ def place_update(request, pk):
     place = get_object_or_404(Place, pk=pk)
     form = PlaceForm(request.POST, instance=place)
     if not form.is_valid():
+        logger.warning(
+            "Place update rejected: place_id=%s, invalid form: %s",
+            pk,
+            form.errors.get_json_data(),
+        )
         return _json_errors(form)
 
     files = request.FILES.getlist("photos")
+    telegram_configuration = _telegram_configuration()
+    telegram_enabled = all(telegram_configuration)
+    logger.info(
+        "Place update requested: place_id=%s, telegram_enabled=%s, confirmation_enabled=%s, "
+        "token_configured=%s, admin_chat_configured=%s, photos=%d",
+        pk,
+        telegram_enabled,
+        *telegram_configuration,
+        len(files),
+    )
 
-    if _telegram_enabled():
+    if telegram_enabled:
         queue = queue_place_update(
             place,
             title=form.cleaned_data["title"],
@@ -112,12 +149,17 @@ def place_update(request, pk):
             end_date=form.cleaned_data.get("end_date"),
             files=files,
         )
+        logger.info(
+            "Place update queued for review: place_id=%s, change_request_id=%s",
+            pk,
+            queue.pk,
+        )
         return JsonResponse(
             {
                 "ok": True,
                 "status": "pending",
                 "change_request_id": queue.pk,
-                "message": "Изменение отправлено на подтверждение в Telegram.",
+                "message": "Изменение отправлено на рассмотрение.",
             }
         )
 
@@ -131,6 +173,7 @@ def place_update(request, pk):
         end_date=form.cleaned_data.get("end_date"),
         files=files,
     )
+    logger.info("Place updated immediately: place_id=%s", place.pk)
     return JsonResponse({"ok": True, "place": serialize_place(place)})
 
 
@@ -145,7 +188,7 @@ def place_delete(request, pk):
                 "ok": True,
                 "status": "pending",
                 "change_request_id": queue.pk,
-                "message": "Удаление отправлено на подтверждение в Telegram.",
+                "message": "Удаление отправлено на рассмотрение.",
             }
         )
 
@@ -218,7 +261,7 @@ def photo_delete(request, pk):
                 "ok": True,
                 "status": "pending",
                 "change_request_id": queue.pk,
-                "message": "Удаление фотографии отправлено на подтверждение в Telegram.",
+                "message": "Удаление фотографии отправлено на рассмотрение.",
             }
         )
 
