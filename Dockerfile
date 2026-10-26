@@ -6,7 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN python -c "from pathlib import Path; path = Path('requirements.txt'); path.write_text(path.read_text(encoding='utf-16'), encoding='utf-8')" \
+    && pip install --no-cache-dir -r requirements.txt \
     && addgroup --system app \
     && adduser --system --ingroup app app \
     && mkdir -p /app/media \
