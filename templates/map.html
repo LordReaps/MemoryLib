@@ -3,6 +3,16 @@
 
 {% block head %}
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.3.0/dist/maplibre-gl.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "leaflet": "https://unpkg.com/leaflet@1.9.4/dist/leaflet-src.esm.js",
+        "maplibre-gl": "https://unpkg.com/maplibre-gl@6.3.0/dist/maplibre-gl.mjs",
+        "@maplibre/maplibre-gl-leaflet": "https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/dist/leaflet-maplibre-gl.mjs"
+      }
+    }
+  </script>
 {% endblock %}
 
 {% block content %}
@@ -86,6 +96,5 @@
   {{ update_url_template|json_script:"update-url-template" }}
   {{ delete_url_template|json_script:"delete-url-template" }}
   {{ delete_photo_url_template|json_script:"delete-photo-url-template" }}
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="{% static 'js/map.js' %}"></script>
+  <script type="module" src="{% static 'js/map.js' %}"></script>
 {% endblock %}

@@ -1,3 +1,6 @@
+import * as L from "leaflet";
+import { maplibreGL } from "@maplibre/maplibre-gl-leaflet";
+
 (function () {
   const places = JSON.parse(document.getElementById("places-data").textContent);
   const createUrl = JSON.parse(document.getElementById("create-url").textContent);
@@ -56,14 +59,8 @@
     maxBoundsViscosity: 1.0 // не даёт «выпрыгнуть» за границы
     }).setView([50.0, 10.0], 4);
 
-  map.attributionControl.remove();
-
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    minZoom: 2,
-    noWrap: true,
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maplibreGL({
+    style: "https://tiles.openfreemap.org/styles/liberty",
   }).addTo(map);
 
   const markers = new Map();
