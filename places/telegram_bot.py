@@ -222,25 +222,36 @@ async def handle_callback(update, context):
         await query.answer("Неверный формат callback", show_alert=False)
         return
 
-    if prefix == "approve":
-        try:
+    if prefix not in ("approve", "reject"):
+        await query.answer("Неизвестная команда", show_alert=False)
+        return
+
+    action_label = "подтверждение" if prefix == "approve" else "отклонение"
+    logger.info("Telegram callback received: action=%s, change_request_id=%s", prefix, request_id)
+    try:
+        await query.answer(f"Заявка #{request_id}: выполняю {action_label}…", show_alert=True)
+    except Exception:
+        logger.exception("Не удалось ответить на Telegram callback заявки #%s", request_id)
+
+    try:
+        if prefix == "approve":
             await sync_to_async(approve_change_request)(request_id, reviewed_by="telegram")
-            await query.answer("Заявка подтверждена", show_alert=True)
-        except Exception as exc:
-            logger.exception("Не удалось подтвердить заявку #%s в Telegram", request_id)
-            await query.answer(f"Ошибка: {exc}", show_alert=True)
-        return
-
-    if prefix == "reject":
-        try:
+            result_message = f"Заявка #{request_id} подтверждена и применена."
+        else:
             await sync_to_async(reject_change_request)(request_id, reviewed_by="telegram")
-            await query.answer("Заявка отклонена", show_alert=True)
-        except Exception as exc:
-            logger.exception("Не удалось отклонить заявку #%s в Telegram", request_id)
-            await query.answer(f"Ошибка: {exc}", show_alert=True)
-        return
+            result_message = f"Заявка #{request_id} отклонена."
+    except Exception as exc:
+        logger.exception("Не удалось обработать Telegram callback заявки #%s", request_id)
+        result_message = f"Не удалось обработать заявку #{request_id}: {exc}"
+    else:
+        logger.info("Telegram callback completed: action=%s, change_request_id=%s", prefix, request_id)
 
-    await query.answer("Неизвестная команда", show_alert=False)
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+        if query.message is not None:
+            await query.message.reply_text(result_message)
+    except Exception:
+        logger.exception("Не удалось отправить результат обработки заявки #%s в Telegram", request_id)
 
 
 async def start_command(update, context):
@@ -264,6 +275,6 @@ def start_telegram_bot():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_error_handler(handle_telegram_error)
-    application.job_queue.run_repeating(send_pending_requests, interval=10, first=1)
+    application.job_queue.run_repeating(send_pending_requests, interval=3, first=1)
     logger.info("Telegram bot polling started; checking queue every 3 seconds")
     application.run_polling()

@@ -3,7 +3,7 @@ import shutil
 import tempfile
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from asgiref.sync import async_to_sync
 from django.conf import settings
@@ -24,7 +24,12 @@ from .services import (
     queue_place_update,
     update_place,
 )
-from .telegram_bot import _prepare_telegram_photo, _request_photos, send_pending_requests
+from .telegram_bot import (
+    _prepare_telegram_photo,
+    _request_photos,
+    handle_callback,
+    send_pending_requests,
+)
 
 
 class AuthenticatedTestCase(TestCase):
@@ -397,6 +402,28 @@ class TelegramPhotoTests(TestCase):
         self.assertEqual(bot.send_photo.await_args.kwargs["reply_to_message_id"], 67890)
         change_request.refresh_from_db()
         self.assertTrue(change_request.telegram_photos_sent)
+
+    def test_callback_is_acknowledged_before_applying_request(self):
+        events = []
+        query = SimpleNamespace(
+            data="approve:42",
+            answer=AsyncMock(side_effect=lambda *args, **kwargs: events.append("answered")),
+            edit_message_reply_markup=AsyncMock(),
+            message=SimpleNamespace(reply_text=AsyncMock()),
+        )
+        update = SimpleNamespace(callback_query=query)
+
+        def apply_request(*args, **kwargs):
+            events.append("applied")
+
+        with patch("places.telegram_bot.approve_change_request", side_effect=apply_request):
+            async_to_sync(handle_callback)(update, SimpleNamespace())
+
+        self.assertEqual(events, ["answered", "applied"])
+        query.edit_message_reply_markup.assert_awaited_once_with(reply_markup=None)
+        query.message.reply_text.assert_awaited_once_with(
+            "Заявка #42 подтверждена и применена."
+        )
 
 
 class AuthTests(TestCase):
