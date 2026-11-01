@@ -28,6 +28,11 @@ import { maplibreGL } from "@maplibre/maplibre-gl-leaflet";
   const cancelButton = document.getElementById("place-form-cancel");
 
   const deletePhotoUrlTemplate = JSON.parse(document.getElementById("delete-photo-url-template").textContent);
+  const createFolderUrl = JSON.parse(document.getElementById("create-folder-url").textContent);
+  const detailUrlNode = document.getElementById("detail-url-template");
+  const detailUrlTemplate = detailUrlNode
+    ? JSON.parse(detailUrlNode.textContent)
+    : "/places/{pk}/";
 
   const mobileQuery = window.matchMedia("(max-width: 768px)");
   const placeSheet = document.getElementById("place-sheet");
@@ -39,6 +44,52 @@ import { maplibreGL } from "@maplibre/maplibre-gl-leaflet";
   const lightboxClose = document.getElementById("lightbox-close");
   const lightboxPrev = document.getElementById("lightbox-prev");
   const lightboxNext = document.getElementById("lightbox-next");
+
+  const folderSelect = document.getElementById("id_folder");
+  let lastFolderValue = folderSelect.value;
+
+  folderSelect.addEventListener("change", function () {
+    if (folderSelect.value !== "__new__") {
+      lastFolderValue = folderSelect.value;
+      return;
+    }
+
+    const rawName = window.prompt("Название новой папки");
+    const name = (rawName || "").trim();
+    if (!name) {
+      folderSelect.value = lastFolderValue;
+      return;
+    }
+
+    const body = new FormData();
+    body.append("name", name);
+    body.append("csrfmiddlewaretoken", form.querySelector("[name=csrfmiddlewaretoken]").value);
+
+    fetch(createFolderUrl, { method: "POST", body: body })
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (data) {
+        if (!data.ok) {
+          const errors = data.errors && data.errors.name;
+          throw new Error((errors && errors[0]) || "Не удалось создать папку");
+        }
+
+        const option = document.createElement("option");
+        option.value = String(data.folder.id);
+        option.textContent = data.folder.name;
+        folderSelect.insertBefore(
+          option,
+          folderSelect.querySelector('option[value="__new__"]')
+        );
+        folderSelect.value = option.value;
+        lastFolderValue = option.value;
+      })
+      .catch(function (error) {
+        window.alert(error.message || "Не удалось создать папку");
+        folderSelect.value = lastFolderValue;
+      });
+  });
 
   function isMobile() {
     return mobileQuery.matches;
@@ -190,6 +241,11 @@ import { maplibreGL } from "@maplibre/maplibre-gl-leaflet";
     const actions = document.createElement("div");
     actions.className = "place-popup__actions";
 
+    const openLink = document.createElement("a");
+    openLink.className = "btn btn--accent";
+    openLink.textContent = "Открыть";
+    openLink.href = urlFor(detailUrlTemplate, place.id);
+
     const editButton = document.createElement("button");
     editButton.type = "button";
     editButton.className = "btn btn--ghost";
@@ -206,6 +262,7 @@ import { maplibreGL } from "@maplibre/maplibre-gl-leaflet";
       confirmDelete(place);
     });
 
+    actions.appendChild(openLink);
     actions.appendChild(editButton);
     actions.appendChild(deleteButton);
     wrap.appendChild(actions);
@@ -371,6 +428,8 @@ import { maplibreGL } from "@maplibre/maplibre-gl-leaflet";
     descriptionInput.value = place.description || "";
     startDateInput.value = place.start_date || "";
     endDateInput.value = place.end_date || "";
+    folderSelect.value = place.folder ? String(place.folder.id) : "";
+    lastFolderValue = folderSelect.value;
     setCoords(place.latitude, place.longitude);
 
     renderPreviews(place.photos);
@@ -629,6 +688,8 @@ import { maplibreGL } from "@maplibre/maplibre-gl-leaflet";
     selectedFiles = [];
     photosInput.value = "";
     clearPreviews();
+    folderSelect.value = "";
+    lastFolderValue = "";
   };
 
   form.addEventListener("submit", function (event) {
@@ -827,5 +888,16 @@ import { maplibreGL } from "@maplibre/maplibre-gl-leaflet";
       })
     );
     map.fitBounds(bounds, { padding: [48, 48], maxZoom: 12 });
+  }
+
+  const focusId = Number(new URLSearchParams(window.location.search).get("place"));
+  if (focusId && markers.has(focusId)) {
+    const marker = markers.get(focusId);
+    map.setView(marker.getLatLng(), 13);
+    if (isMobile()) {
+      openSheet(focusId);
+    } else {
+      marker.openPopup();
+    }
   }
 })();

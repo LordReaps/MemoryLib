@@ -1,11 +1,33 @@
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils.formats import date_format
+
+
+class Folder(models.Model):
+    name = models.CharField("Название", max_length=120, unique=True)
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Папка"
+        verbose_name_plural = "Папки"
+
+    def __str__(self):
+        return self.name
 
 
 class Place(models.Model):
     title = models.CharField("Название", max_length=200)
     description = models.TextField("Описание", blank=True)
+    folder = models.ForeignKey(
+        Folder,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="places",
+        verbose_name="Папка",
+    )
     latitude = models.FloatField(
         "Широта",
         validators=[MinValueValidator(-90), MaxValueValidator(90)],
@@ -26,6 +48,21 @@ class Place(models.Model):
 
     def __str__(self):
         return self.title
+
+    @property
+    def date_range(self):
+        if self.start_date and self.end_date:
+            if self.start_date == self.end_date:
+                return date_format(self.start_date, "j E Y")
+            return (
+                f"{date_format(self.start_date, 'j E Y')} — "
+                f"{date_format(self.end_date, 'j E Y')}"
+            )
+        if self.start_date:
+            return f"с {date_format(self.start_date, 'j E Y')}"
+        if self.end_date:
+            return f"до {date_format(self.end_date, 'j E Y')}"
+        return ""
 
     def clean(self):
         super().clean()

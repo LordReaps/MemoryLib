@@ -1,6 +1,8 @@
 import logging
+from pathlib import Path
 
 from django.conf import settings
+from django.db.models import Count
 from django.http import JsonResponse, Http404, FileResponse
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse
@@ -9,7 +11,7 @@ from django.views.decorators.http import require_POST
 
 from . import auth
 from .forms import PlaceForm, LoginForm
-from .models import Photo, Place
+from .models import Folder, Photo, Place
 from .services import (
     ServiceOperationError,
     approve_change_request,
@@ -48,19 +50,78 @@ def _json_errors(form):
     return JsonResponse({"ok": False, "errors": form.errors.get_json_data()}, status=400)
 
 
+def _save_failed(message, status=400):
+    return JsonResponse({"ok": False, "errors": {"__all__": [message]}}, status=status)
+
+
+RECENT_LIMIT = 10
+
+
+def home_view(request):
+    places = Place.objects.select_related("folder").prefetch_related("photos")
+    return render(
+        request,
+        "home.html",
+        {
+            "recent_places": places.order_by("-created_at")[:RECENT_LIMIT],
+            "folders": Folder.objects.annotate(place_count=Count("places")).order_by("name"),
+        },
+    )
+
+
 def map_view(request):
-    places_data = [serialize_place(place) for place in Place.objects.all()]
+    places_data = [
+        serialize_place(place) for place in Place.objects.select_related("folder")
+    ]
     return render(
         request,
         "map.html",
         {
             "places_data": places_data,
+            "folders": Folder.objects.all(),
             "create_url": reverse("places:place_create"),
+            "create_folder_url": reverse("places:folder_create"),
+            "detail_url_template": _place_url_template("place_detail"),
             "update_url_template": _place_url_template("place_update"),
             "delete_url_template": _place_url_template("place_delete"),
             "delete_photo_url_template": reverse("places:photo_delete", kwargs={"pk": 0}).replace("/0/", "/{pk}/"),
         },
     )
+
+
+def place_detail(request, pk):
+    place = get_object_or_404(
+        Place.objects.select_related("folder").prefetch_related("photos"), pk=pk
+    )
+    return render(request, "place.html", {"place": place})
+
+
+def folder_detail(request, pk):
+    folder = get_object_or_404(Folder, pk=pk)
+    places = folder.places.select_related("folder").prefetch_related("photos")
+    return render(
+        request,
+        "folder.html",
+        {"folder": folder, "places": places.order_by("title")},
+    )
+
+
+@require_POST
+def folder_create(request):
+    name = (request.POST.get("name") or "").strip()
+    if not name or len(name) > 120:
+        return JsonResponse(
+            {"ok": False, "errors": {"name": ["Введите название папки (до 120 символов)."]}},
+            status=400,
+        )
+    if Folder.objects.filter(name__iexact=name).exists():
+        return JsonResponse(
+            {"ok": False, "errors": {"name": ["Папка с таким названием уже есть."]}},
+            status=400,
+        )
+
+    folder = Folder.objects.create(name=name)
+    return JsonResponse({"ok": True, "folder": {"id": folder.pk, "name": folder.name}})
 
 
 @require_POST
@@ -82,15 +143,23 @@ def place_create(request):
     )
 
     if telegram_enabled:
-        queue = queue_place_create(
-            title=form.cleaned_data["title"],
-            description=form.cleaned_data.get("description") or "",
-            latitude=form.cleaned_data["latitude"],
-            longitude=form.cleaned_data["longitude"],
-            start_date=form.cleaned_data.get("start_date"),
-            end_date=form.cleaned_data.get("end_date"),
-            files=files,
-        )
+        try:
+            queue = queue_place_create(
+                title=form.cleaned_data["title"],
+                description=form.cleaned_data.get("description") or "",
+                folder=form.cleaned_data.get("folder"),
+                latitude=form.cleaned_data["latitude"],
+                longitude=form.cleaned_data["longitude"],
+                start_date=form.cleaned_data.get("start_date"),
+                end_date=form.cleaned_data.get("end_date"),
+                files=files,
+            )
+        except Exception:
+            logger.exception("Place create failed while saving queued files")
+            return _save_failed(
+                "Не удалось сохранить фотографии. Попробуйте ещё раз.", status=500
+            )
+
         logger.info("Place create queued for review: change_request_id=%s", queue.pk)
         return JsonResponse(
             {
@@ -101,15 +170,21 @@ def place_create(request):
             }
         )
 
-    place = create_place(
-        title=form.cleaned_data["title"],
-        description=form.cleaned_data.get("description") or "",
-        latitude=form.cleaned_data["latitude"],
-        longitude=form.cleaned_data["longitude"],
-        start_date=form.cleaned_data.get("start_date"),
-        end_date=form.cleaned_data.get("end_date"),
-        files=files,
-    )
+    try:
+        place = create_place(
+            title=form.cleaned_data["title"],
+            description=form.cleaned_data.get("description") or "",
+            folder=form.cleaned_data.get("folder"),
+            latitude=form.cleaned_data["latitude"],
+            longitude=form.cleaned_data["longitude"],
+            start_date=form.cleaned_data.get("start_date"),
+            end_date=form.cleaned_data.get("end_date"),
+            files=files,
+        )
+    except Exception:
+        logger.exception("Place create failed")
+        return _save_failed("Не удалось сохранить место. Попробуйте ещё раз.")
+
     logger.info("Place created immediately: place_id=%s", place.pk)
     return JsonResponse({"ok": True, "place": serialize_place(place)})
 
@@ -139,16 +214,24 @@ def place_update(request, pk):
     )
 
     if telegram_enabled:
-        queue = queue_place_update(
-            place,
-            title=form.cleaned_data["title"],
-            description=form.cleaned_data.get("description") or "",
-            latitude=form.cleaned_data["latitude"],
-            longitude=form.cleaned_data["longitude"],
-            start_date=form.cleaned_data.get("start_date"),
-            end_date=form.cleaned_data.get("end_date"),
-            files=files,
-        )
+        try:
+            queue = queue_place_update(
+                place,
+                title=form.cleaned_data["title"],
+                description=form.cleaned_data.get("description") or "",
+                folder=form.cleaned_data.get("folder"),
+                latitude=form.cleaned_data["latitude"],
+                longitude=form.cleaned_data["longitude"],
+                start_date=form.cleaned_data.get("start_date"),
+                end_date=form.cleaned_data.get("end_date"),
+                files=files,
+            )
+        except Exception:
+            logger.exception("Place update failed while saving queued files")
+            return _save_failed(
+                "Не удалось сохранить фотографии. Попробуйте ещё раз.", status=500
+            )
+
         logger.info(
             "Place update queued for review: place_id=%s, change_request_id=%s",
             pk,
@@ -163,16 +246,22 @@ def place_update(request, pk):
             }
         )
 
-    place = update_place(
-        place,
-        title=form.cleaned_data["title"],
-        description=form.cleaned_data.get("description") or "",
-        latitude=form.cleaned_data["latitude"],
-        longitude=form.cleaned_data["longitude"],
-        start_date=form.cleaned_data.get("start_date"),
-        end_date=form.cleaned_data.get("end_date"),
-        files=files,
-    )
+    try:
+        place = update_place(
+            place,
+            title=form.cleaned_data["title"],
+            description=form.cleaned_data.get("description") or "",
+            folder=form.cleaned_data.get("folder"),
+            latitude=form.cleaned_data["latitude"],
+            longitude=form.cleaned_data["longitude"],
+            start_date=form.cleaned_data.get("start_date"),
+            end_date=form.cleaned_data.get("end_date"),
+            files=files,
+        )
+    except Exception:
+        logger.exception("Place update failed")
+        return _save_failed("Не удалось сохранить место. Попробуйте ещё раз.")
+
     logger.info("Place updated immediately: place_id=%s", place.pk)
     return JsonResponse({"ok": True, "place": serialize_place(place)})
 
@@ -228,6 +317,18 @@ def change_request_reject(request, pk):
     )
 
 
+def _photo_content_type(name, stored_mime_type):
+    """Тип отдаваемого файла по расширению: оригинал у нас всегда .jpg, миниатюра — .webp."""
+    suffix = Path(name or "").suffix.lower()
+    content_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    return content_types.get(suffix) or stored_mime_type or "application/octet-stream"
+
+
 def serve_photo(request, pk, file_type):
     if not request.session.get("authenticated"):
         raise Http404
@@ -247,7 +348,10 @@ def serve_photo(request, pk, file_type):
     if not file_field:
         raise Http404
 
-    return FileResponse(file_field.open("rb"), content_type=photo.mime_type or "application/octet-stream")
+    return FileResponse(
+        file_field.open("rb"),
+        content_type=_photo_content_type(file_field.name, photo.mime_type),
+    )
 
 
 @require_POST
@@ -278,7 +382,7 @@ def photo_delete(request, pk):
 
 def login_view(request):
     if request.session.get("authenticated"):
-        return redirect("places:map")
+        return redirect("places:home")
     form = LoginForm(request.POST or None)
     ip = request.META.get("REMOTE_ADDR", "")
 
@@ -297,7 +401,7 @@ def login_view(request):
                     require_https=request.is_secure(),
                 ):
                     return redirect(next_url)
-                return redirect("places:map")
+                return redirect("places:home")
             else:
                 auth.register_failure(ip)
                 form.add_error(None, "Неверный пароль.")

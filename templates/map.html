@@ -18,6 +18,8 @@
 {% block content %}
   <div id="map"></div>
 
+  <a class="map-home-link" href="{% url 'places:home' %}" aria-label="На главную">&larr;</a>
+
   <p id="pick-hint" class="pick-hint" hidden>Нажмите на карту, чтобы выбрать точку. Затем можно сдвинуть флажок.</p>
   <p id="place-status" class="place-status" role="status" aria-live="polite" hidden></p>
 
@@ -52,6 +54,17 @@
         <input type="date" name="end_date" id="id_end_date">
       </label>
     </div>
+
+    <label class="place-form__field">
+      Папка
+      <select name="folder" id="id_folder">
+        <option value="">Без папки</option>
+        {% for folder in folders %}
+          <option value="{{ folder.id }}">{{ folder.name }}</option>
+        {% endfor %}
+        <option value="__new__">➕ Новая папка…</option>
+      </select>
+    </label>
 
     <div class="place-form__photos">
       <label class="photo-picker" for="id_photos">
@@ -93,8 +106,10 @@
 {% block scripts %}
   {{ places_data|json_script:"places-data" }}
   {{ create_url|json_script:"create-url" }}
+  {{ create_folder_url|json_script:"create-folder-url" }}
+  {{ detail_url_template|json_script:"detail-url-template" }}
   {{ update_url_template|json_script:"update-url-template" }}
   {{ delete_url_template|json_script:"delete-url-template" }}
   {{ delete_photo_url_template|json_script:"delete-photo-url-template" }}
-  <script type="module" src="{% static 'js/map.js' %}"></script>
+  <script type="module" src="{% static 'js/map.js' %}?v=4"></script>
 {% endblock %}

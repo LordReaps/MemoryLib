@@ -5,8 +5,12 @@ from . import views
 app_name = "places"
 
 urlpatterns = [
-    path("", views.map_view, name="map"),
+    path("", views.home_view, name="home"),
+    path("map/", views.map_view, name="map"),
+    path("folders/create/", views.folder_create, name="folder_create"),
+    path("folders/<int:pk>/", views.folder_detail, name="folder_detail"),
     path("places/create/", views.place_create, name="place_create"),
+    path("places/<int:pk>/", views.place_detail, name="place_detail"),
     path("places/<int:pk>/update/", views.place_update, name="place_update"),
     path("places/<int:pk>/delete/", views.place_delete, name="place_delete"),
     path("change-requests/<int:pk>/approve/", views.change_request_approve, name="change_request_approve"),

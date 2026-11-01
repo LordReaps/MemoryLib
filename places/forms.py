@@ -9,6 +9,7 @@ class PlaceForm(forms.ModelForm):
         fields = [
             "title",
             "description",
+            "folder",
             "latitude",
             "longitude",
             "start_date",
@@ -21,6 +22,7 @@ class PlaceForm(forms.ModelForm):
             "description": forms.Textarea(
                 attrs={"rows": 4, "placeholder": "Описание (необязательно)"}
             ),
+            "folder": forms.Select(attrs={"id": "id_folder"}),
             "latitude": forms.HiddenInput(),
             "longitude": forms.HiddenInput(),
             "start_date": forms.DateInput(attrs={"type": "date"}),

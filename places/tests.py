@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+from datetime import timedelta
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -12,15 +13,17 @@ from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from PIL import Image
 
-from .models import ChangeRequest, Photo, Place
+from .models import ChangeRequest, Folder, Photo, Place
 from .services import (
     approve_change_request,
     build_change_request_message,
     create_place,
     delete_photo,
     delete_place,
+    queue_place_create,
     queue_place_update,
     update_place,
 )
@@ -30,6 +33,7 @@ from .telegram_bot import (
     handle_callback,
     send_pending_requests,
 )
+from .views import _photo_content_type
 
 
 class AuthenticatedTestCase(TestCase):
@@ -129,6 +133,20 @@ class PlaceServiceTests(TestCase):
         delete_place(place)
         self.assertEqual(Place.objects.count(), 0)
 
+    def test_failed_queue_does_not_leave_change_request(self):
+        upload = SimpleUploadedFile("photo.jpg", b"not an image", content_type="image/jpeg")
+
+        with patch("places.services._save_queued_files", side_effect=OSError("boom")):
+            with self.assertRaises(OSError):
+                queue_place_create(
+                    title="Сбой",
+                    latitude=1.0,
+                    longitude=2.0,
+                    files=[upload],
+                )
+
+        self.assertEqual(ChangeRequest.objects.count(), 0)
+
     def test_create_rejects_invalid_coordinates(self):
         with self.assertRaises(ValidationError):
             create_place(title="За краем", latitude=95.0, longitude=10.0)
@@ -141,7 +159,7 @@ class MapViewTests(AuthenticatedTestCase):
             latitude=52.52,
             longitude=13.405,
         )
-        response = self.client.get("/")
+        response = self.client.get(reverse("places:map"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "places-data")
         self.assertContains(response, '"latitude": 52.52')
@@ -150,6 +168,265 @@ class MapViewTests(AuthenticatedTestCase):
         self.assertContains(response, 'id="place-sheet"')
         self.assertContains(response, 'id="lightbox-prev"')
         self.assertContains(response, 'id="photo-preview"')
+        self.assertContains(response, 'id="id_folder"')
+        self.assertContains(response, "map-home-link")
+        self.assertContains(response, "detail-url-template")
+
+
+class HomePageTests(AuthenticatedTestCase):
+    def test_home_renders_sections(self):
+        response = self.client.get(reverse("places:home"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Наш Хаб")
+        self.assertContains(response, "Недавно добавленные")
+        self.assertContains(response, "Папки")
+        self.assertContains(response, "Карта")
+        self.assertNotContains(response, 'id="map"')
+
+    def test_home_requires_auth(self):
+        response = Client().get(reverse("places:home"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
+
+    def test_home_lists_places_and_folders(self):
+        folder = Folder.objects.create(name="Анапа2024")
+        place = Place.objects.create(
+            title="Пляж",
+            latitude=44.89,
+            longitude=37.32,
+            folder=folder,
+            start_date="2024-08-01",
+            end_date="2024-08-10",
+        )
+
+        response = self.client.get(reverse("places:home"))
+
+        self.assertContains(response, "Пляж")
+        self.assertContains(response, "Анапа2024")
+        self.assertContains(response, f"?place={place.pk}")
+        self.assertContains(response, "0 фото")
+        self.assertContains(response, 'class="folder-item__count">1<')
+        self.assertContains(
+            response,
+            reverse("places:folder_detail", kwargs={"pk": folder.pk}),
+        )
+        self.assertContains(
+            response,
+            reverse("places:place_detail", kwargs={"pk": place.pk}),
+        )
+        self.assertContains(response, "На карту")
+
+    def test_home_shows_first_photo_by_sort_order(self):
+        place = Place.objects.create(title="Фото", latitude=1.0, longitude=1.0)
+        later = Photo.objects.create(
+            place=place,
+            image="places/a.jpg",
+            thumbnail="places/b.webp",
+            original_filename="b.jpg",
+            sort_order=2,
+        )
+        first = Photo.objects.create(
+            place=place,
+            image="places/c.jpg",
+            thumbnail="places/d.webp",
+            original_filename="d.jpg",
+            sort_order=1,
+        )
+
+        response = self.client.get(reverse("places:home"))
+
+        self.assertContains(response, f"/photos/{first.pk}/thumb/")
+        self.assertNotContains(response, f"/photos/{later.pk}/thumb/")
+
+    def test_home_shows_ten_newest_places(self):
+        now = timezone.now()
+        for index in range(11):
+            place = Place.objects.create(
+                title=f"Место {index}",
+                latitude=1.0,
+                longitude=1.0,
+            )
+            Place.objects.filter(pk=place.pk).update(
+                created_at=now - timedelta(days=index)
+            )
+
+        response = self.client.get(reverse("places:home"))
+        recent = list(response.context["recent_places"])
+
+        self.assertEqual(len(recent), 10)
+        self.assertEqual(recent[0].title, "Место 0")
+        self.assertEqual(recent[-1].title, "Место 9")
+
+    def test_home_empty_states(self):
+        response = self.client.get(reverse("places:home"))
+        self.assertContains(response, "Пока нет записей.")
+        self.assertContains(response, "Пока нет папок.")
+
+
+class FolderCreateViewTests(AuthenticatedTestCase):
+    def test_create_folder(self):
+        response = self.client.post(
+            reverse("places:folder_create"),
+            {"name": "Анапа2024"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["folder"]["name"], "Анапа2024")
+        self.assertTrue(Folder.objects.filter(name="Анапа2024").exists())
+
+    def test_empty_name_rejected(self):
+        response = self.client.post(
+            reverse("places:folder_create"),
+            {"name": "   "},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Folder.objects.exists())
+
+    def test_duplicate_name_rejected(self):
+        Folder.objects.create(name="Анапа2024")
+        response = self.client.post(
+            reverse("places:folder_create"),
+            {"name": "анапа2024"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Folder.objects.count(), 1)
+
+    def test_get_not_allowed(self):
+        response = self.client.get(reverse("places:folder_create"))
+        self.assertEqual(response.status_code, 405)
+
+    def test_requires_auth(self):
+        response = Client().post(reverse("places:folder_create"), {"name": "Тест"})
+        self.assertEqual(response.status_code, 302)
+
+
+class FolderDetailTests(AuthenticatedTestCase):
+    def test_shows_only_places_of_this_folder(self):
+        folder = Folder.objects.create(name="Анапа2024")
+        other = Folder.objects.create(name="Сочи")
+        Place.objects.create(title="Пляж", latitude=1.0, longitude=1.0, folder=folder)
+        Place.objects.create(title="Горы", latitude=1.0, longitude=1.0, folder=other)
+
+        response = self.client.get(
+            reverse("places:folder_detail", kwargs={"pk": folder.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Анапа2024")
+        self.assertContains(response, "Пляж")
+        self.assertNotContains(response, "Горы")
+        self.assertContains(response, "Записей: 1")
+
+    def test_empty_folder_message(self):
+        folder = Folder.objects.create(name="Пустая")
+
+        response = self.client.get(
+            reverse("places:folder_detail", kwargs={"pk": folder.pk})
+        )
+
+        self.assertContains(response, "В этой папке пока нет мест.")
+
+    def test_missing_folder_returns_404(self):
+        response = self.client.get(
+            reverse("places:folder_detail", kwargs={"pk": 999999})
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_requires_auth(self):
+        folder = Folder.objects.create(name="Тест")
+
+        response = Client().get(
+            reverse("places:folder_detail", kwargs={"pk": folder.pk})
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
+
+
+class PlaceDetailTests(AuthenticatedTestCase):
+    def test_shows_all_place_fields(self):
+        folder = Folder.objects.create(name="Анапа2024")
+        place = Place.objects.create(
+            title="Пляж",
+            description="Тёплое море",
+            latitude=44.89,
+            longitude=37.32,
+            folder=folder,
+            start_date="2024-08-01",
+            end_date="2024-08-10",
+        )
+
+        response = self.client.get(
+            reverse("places:place_detail", kwargs={"pk": place.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Пляж")
+        self.assertContains(response, "Тёплое море")
+        self.assertContains(response, "1 августа 2024")
+        self.assertContains(response, "10 августа 2024")
+        self.assertContains(response, "Анапа2024")
+        self.assertContains(
+            response,
+            reverse("places:folder_detail", kwargs={"pk": folder.pk}),
+        )
+        self.assertContains(response, f"?place={place.pk}")
+
+    def test_shows_all_photos(self):
+        place = Place.objects.create(title="Фото", latitude=1.0, longitude=1.0)
+        first = Photo.objects.create(
+            place=place,
+            image="places/a.jpg",
+            thumbnail="places/b.webp",
+            original_filename="b.jpg",
+        )
+        second = Photo.objects.create(
+            place=place,
+            image="places/c.jpg",
+            thumbnail="places/d.webp",
+            original_filename="d.jpg",
+        )
+
+        response = self.client.get(
+            reverse("places:place_detail", kwargs={"pk": place.pk})
+        )
+
+        self.assertContains(
+            response, reverse("places:serve_photo", kwargs={"pk": first.pk, "file_type": "thumb"})
+        )
+        self.assertContains(
+            response, reverse("places:serve_photo", kwargs={"pk": second.pk, "file_type": "thumb"})
+        )
+        self.assertContains(response, 'id="lightbox"')
+        self.assertContains(response, "place-gallery.js")
+        self.assertNotContains(response, 'target="_blank"')
+
+    def test_without_photos_and_folder(self):
+        place = Place.objects.create(title="Пусто", latitude=1.0, longitude=1.0)
+
+        response = self.client.get(
+            reverse("places:place_detail", kwargs={"pk": place.pk})
+        )
+
+        self.assertContains(response, "Фотографий пока нет.")
+        self.assertContains(response, "0 фото")
+
+    def test_missing_place_returns_404(self):
+        response = self.client.get(
+            reverse("places:place_detail", kwargs={"pk": 999999})
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_requires_auth(self):
+        place = Place.objects.create(title="Тест", latitude=1.0, longitude=1.0)
+
+        response = Client().get(
+            reverse("places:place_detail", kwargs={"pk": place.pk})
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
 
 
 @override_settings(ENABLE_TG_CONFIRMATION=False)
@@ -171,6 +448,34 @@ class PlaceViewTests(AuthenticatedTestCase):
         self.assertTrue(data["ok"])
         self.assertEqual(Place.objects.count(), 1)
         self.assertEqual(data["place"]["title"], "Лиссабон")
+
+    def test_create_place_with_folder(self):
+        folder = Folder.objects.create(name="Анапа2024")
+        response = self.client.post(
+            reverse("places:place_create"),
+            {
+                "title": "Лиссабон",
+                "latitude": "38.7223",
+                "longitude": "-9.1393",
+                "folder": str(folder.pk),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["place"]["folder"], {"id": folder.pk, "name": "Анапа2024"})
+        self.assertEqual(Place.objects.get().folder_id, folder.pk)
+
+    def test_create_returns_json_error_when_saving_fails(self):
+        with patch("places.views.create_place", side_effect=OSError("boom")):
+            response = self.client.post(
+                reverse("places:place_create"),
+                {"title": "Сбой", "latitude": "1", "longitude": "2"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()["ok"])
+        self.assertEqual(Place.objects.count(), 0)
 
     def test_update_place_via_post(self):
         place = create_place(title="Лиссабон", latitude=38.72, longitude=-9.14)
@@ -265,6 +570,45 @@ class PlaceApprovalViewTests(AuthenticatedTestCase):
         self.assertEqual(place.start_date.isoformat(), "2023-05-01")
         self.assertEqual(place.end_date.isoformat(), "2023-05-05")
 
+    def test_create_with_folder_is_queued_until_approved(self):
+        folder = Folder.objects.create(name="Анапа2024")
+        response = self.client.post(
+            reverse("places:place_create"),
+            {
+                "title": "Анапа",
+                "latitude": "44.89",
+                "longitude": "37.32",
+                "folder": str(folder.pk),
+            },
+        )
+
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["status"], "pending")
+        self.assertEqual(Place.objects.count(), 0)
+
+        change_request = ChangeRequest.objects.get(pk=data["change_request_id"])
+        self.assertEqual(change_request.payload["folder_id"], folder.pk)
+        self.assertEqual(change_request.payload["folder_name"], "Анапа2024")
+
+        approve_change_request(change_request.pk, reviewed_by="test")
+        place = Place.objects.get()
+        self.assertEqual(place.folder_id, folder.pk)
+
+    def test_queue_failure_returns_json_and_creates_no_request(self):
+        upload = SimpleUploadedFile("photo.jpg", b"not an image", content_type="image/jpeg")
+
+        with patch("places.services._save_queued_files", side_effect=OSError("boom")):
+            response = self.client.post(
+                reverse("places:place_create"),
+                {"title": "Сбой", "latitude": "1", "longitude": "2", "photos": upload},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(response.json()["ok"])
+        self.assertEqual(ChangeRequest.objects.count(), 0)
+        self.assertEqual(Place.objects.count(), 0)
+
     def test_update_is_queued_until_approved(self):
         place = create_place(
             title="Лиссабон",
@@ -318,6 +662,7 @@ class PlaceApprovalViewTests(AuthenticatedTestCase):
                 "entity: place",
                 "title: Лиссабон",
                 "Описание: Вид на океан",
+                "Папка: —",
                 "Количество файлов: 2",
             ],
         )
@@ -440,7 +785,7 @@ class AuthTests(TestCase):
             reverse("login"),
             {"password": settings.SITE_PASSWORD},
         )
-        self.assertRedirects(response, reverse("places:map"))
+        self.assertRedirects(response, reverse("places:home"))
 
     def test_login_with_wrong_password(self):
         response = self.client.post(reverse("login"), {"password": "wrong"})
@@ -553,3 +898,14 @@ class PhotoAccessTests(AuthenticatedTestCase):
         self.assertFalse(Photo.objects.filter(place_id=place_id).exists())
         self.assertFalse(os.path.exists(image_path))
         self.assertFalse(os.path.exists(thumbnail_path))
+
+
+class PhotoContentTypeTests(TestCase):
+    def test_known_extensions(self):
+        self.assertEqual(_photo_content_type("places/a/thumbnails/x.webp", "image/jpeg"), "image/webp")
+        self.assertEqual(_photo_content_type("places/a/originals/x.jpg", "image/png"), "image/jpeg")
+        self.assertEqual(_photo_content_type("places/a/originals/legacy.png", "image/jpeg"), "image/png")
+
+    def test_unknown_extension_uses_stored_type(self):
+        self.assertEqual(_photo_content_type("places/a/file.bin", "image/heic"), "image/heic")
+        self.assertEqual(_photo_content_type("", ""), "application/octet-stream")

@@ -1,13 +1,18 @@
 from django.contrib import admin
 
-from .models import Place, Photo
+from .models import Folder, Photo, Place
 
+
+@admin.register(Folder)
+class FolderAdmin(admin.ModelAdmin):
+    list_display = ("name", "created_at")
+    search_fields = ("name",)
 
 @admin.register(Place)
 class PlaceAdmin(admin.ModelAdmin):
-    list_display = ("title", "latitude", "longitude", "start_date", "end_date", "updated_at")
+    list_display = ("title", "folder", "latitude", "longitude", "start_date", "end_date", "updated_at")
     search_fields = ("title", "description")
-    list_filter = ("start_date", "end_date")
+    list_filter = ("folder", "start_date", "end_date")
 
 @admin.register(Photo)
 class PhotoAdmin(admin.ModelAdmin):

@@ -14,7 +14,7 @@ from django.urls import reverse
 from django.utils import timezone
 from PIL import Image, ImageOps
 
-from .models import ChangeRequest, Photo, Place
+from .models import ChangeRequest, Folder, Photo, Place
 
 
 class ServiceOperationError(RuntimeError):
@@ -30,6 +30,11 @@ def serialize_place(place):
         "longitude": place.longitude,
         "start_date": place.start_date.isoformat() if place.start_date else None,
         "end_date": place.end_date.isoformat() if place.end_date else None,
+        "folder": (
+            {"id": place.folder_id, "name": place.folder.name}
+            if place.folder_id
+            else None
+        ),
         "photos": [
             {
                 "id": p.id,
@@ -47,6 +52,7 @@ def _build_place(**fields):
     place = Place(
         title=fields["title"],
         description=fields.get("description") or "",
+        folder=fields.get("folder"),
         latitude=fields["latitude"],
         longitude=fields["longitude"],
         start_date=fields.get("start_date"),
@@ -75,6 +81,7 @@ def update_place(place, **fields):
 
     place.title = fields["title"]
     place.description = fields.get("description") or ""
+    place.folder = fields.get("folder")
     place.latitude = fields["latitude"]
     place.longitude = fields["longitude"]
     place.start_date = fields.get("start_date")
@@ -297,27 +304,38 @@ def _load_queued_files(change_request):
 def _queue_request(action, entity_type, entity_id, payload, uploaded_files=None):
     payload = payload or {}
 
-    change_request = ChangeRequest.objects.create(
-        action=action,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        payload=payload,
-        status=ChangeRequest.STATUS_PENDING,
-    )
-    change_request.request_hash = _request_hash_for_payload(payload)
-    change_request.save(update_fields=["request_hash"])
+    with transaction.atomic():
+        change_request = ChangeRequest.objects.create(
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            payload=payload,
+            status=ChangeRequest.STATUS_PENDING,
+        )
+        change_request.request_hash = _request_hash_for_payload(payload)
+        change_request.save(update_fields=["request_hash"])
 
-    if uploaded_files:
-        _save_queued_files(change_request, uploaded_files)
+        if uploaded_files:
+            try:
+                _save_queued_files(change_request, uploaded_files)
+            except Exception:
+                shutil.rmtree(
+                    _change_requests_root() / str(change_request.pk),
+                    ignore_errors=True,
+                )
+                raise
 
     return change_request
 
 
 def queue_place_create(**fields):
     uploaded_files = fields.pop("files", [])
+    folder = fields.get("folder")
     payload = {
         "title": fields.get("title") or "",
         "description": fields.get("description") or "",
+        "folder_id": folder.pk if folder else None,
+        "folder_name": folder.name if folder else "",
         "latitude": fields.get("latitude"),
         "longitude": fields.get("longitude"),
         "start_date": _payload_date(fields.get("start_date")),
@@ -334,10 +352,13 @@ def queue_place_create(**fields):
 
 def queue_place_update(place, **fields):
     uploaded_files = fields.pop("files", [])
+    folder = fields.get("folder")
     payload = {
         "place_id": place.pk,
         "title": fields.get("title") or "",
         "description": fields.get("description") or "",
+        "folder_id": folder.pk if folder else None,
+        "folder_name": folder.name if folder else "",
         "latitude": fields.get("latitude"),
         "longitude": fields.get("longitude"),
         "start_date": _payload_date(fields.get("start_date")),
@@ -396,6 +417,7 @@ def build_change_request_message(change_request, file_count=None):
     if change_request.entity_type == ChangeRequest.ENTITY_PLACE:
         parts.append(f"title: {payload.get('title') or '—'}")
         parts.append(f"Описание: {payload.get('description') or '—'}")
+        parts.append(f"Папка: {payload.get('folder_name') or '—'}")
     elif change_request.action == ChangeRequest.ACTION_DELETE:
         parts.append(f"entity_id: {change_request.entity_id}")
         parts.append(f"filename: {payload.get('original_filename') or '—'}")
@@ -410,11 +432,14 @@ def build_change_request_message(change_request, file_count=None):
 def _apply_pending_action(change_request, reviewed_by):
     payload = change_request.payload or {}
     files = _load_queued_files(change_request)
+    folder_id = payload.get("folder_id")
+    folder = Folder.objects.filter(pk=folder_id).first() if folder_id else None
 
     if change_request.action == ChangeRequest.ACTION_CREATE:
         place = create_place(
             title=payload.get("title") or "",
             description=payload.get("description") or "",
+            folder=folder,
             latitude=payload.get("latitude"),
             longitude=payload.get("longitude"),
             start_date=_date_from_payload(payload.get("start_date")),
@@ -431,6 +456,7 @@ def _apply_pending_action(change_request, reviewed_by):
             place,
             title=payload.get("title") or "",
             description=payload.get("description") or "",
+            folder=folder,
             latitude=payload.get("latitude"),
             longitude=payload.get("longitude"),
             start_date=_date_from_payload(payload.get("start_date")),
