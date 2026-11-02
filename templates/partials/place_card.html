@@ -1,0 +1,32 @@
+<div class="place-card">
+  <a class="place-card__link" href="{% url 'places:place_detail' place.pk %}">
+    <div class="place-card__thumb">
+      {% with photo=place.photos.all|first %}
+        {% if photo %}
+          <img src="{% url 'places:serve_photo' photo.pk 'thumb' %}" alt="" loading="lazy" decoding="async">
+        {% else %}
+          <span class="place-card__thumb-empty" aria-hidden="true">📍</span>
+        {% endif %}
+      {% endwith %}
+    </div>
+
+    <div class="place-card__body">
+      <div class="place-card__top">
+        <h3 class="place-card__title">{{ place.title }}</h3>
+        {% if place.folder %}<span class="chip">{{ place.folder.name }}</span>{% endif %}
+      </div>
+
+      {% if place.date_range %}
+        <p class="place-card__dates">{{ place.date_range }}</p>
+      {% endif %}
+
+      {% if place.description %}
+        <p class="place-card__desc">{{ place.description|truncatechars:140 }}</p>
+      {% endif %}
+
+      <p class="place-card__meta">{{ place.photos.count }} фото</p>
+    </div>
+  </a>
+
+  <a class="map-button map-button--small" href="{% url 'places:map' %}?place={{ place.id }}">На карту</a>
+</div>

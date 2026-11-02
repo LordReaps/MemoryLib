@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ place.title }}{% endblock %}
+
+{% block content %}
+  <main class="place-page">
+    <a class="back-link" href="{% url 'places:home' %}">&larr; На главную</a>
+
+    <h1 class="place-page__title">{{ place.title }}</h1>
+
+    <div class="place-page__meta">
+      {% if place.folder %}
+        <a class="chip" href="{% url 'places:folder_detail' place.folder.id %}">{{ place.folder.name }}</a>
+      {% endif %}
+      {% if place.date_range %}<span>{{ place.date_range }}</span>{% endif %}
+      <span>{{ place.photos.count }} фото</span>
+    </div>
+
+    <div class="place-page__actions">
+      <a class="map-button" href="{% url 'places:map' %}?place={{ place.id }}">На карту</a>
+    </div>
+
+    {% if place.description %}
+      <div class="place-page__desc">{{ place.description|linebreaks }}</div>
+    {% endif %}
+
+    <h2 class="home__section-title">Фотографии</h2>
+    <div class="photo-grid">
+      {% for photo in place.photos.all %}
+        <a class="photo-grid__item" href="{% url 'places:serve_photo' photo.pk 'original' %}">
+          <img src="{% url 'places:serve_photo' photo.pk 'thumb' %}" alt="" loading="lazy" decoding="async">
+        </a>
+      {% empty %}
+        <p class="empty">Фотографий пока нет.</p>
+      {% endfor %}
+    </div>
+  </main>
+
+  <div id="lightbox" class="lightbox" hidden>
+    <button type="button" class="lightbox__nav lightbox__nav--prev" id="lightbox-prev" aria-label="Предыдущее фото">&#8249;</button>
+    <button type="button" class="lightbox__nav lightbox__nav--next" id="lightbox-next" aria-label="Следующее фото">&#8250;</button>
+    <button type="button" class="lightbox__close" id="lightbox-close" aria-label="Закрыть">&times;</button>
+    <img id="lightbox-img" class="lightbox__img" src="" alt="Просмотр фото">
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{% static 'js/place-gallery.js' %}?v=1"></script>
+{% endblock %}

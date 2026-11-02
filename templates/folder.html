@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}{{ folder.name }}{% endblock %}
+
+{% block content %}
+  <main class="home">
+    <header class="home__hero home__hero--compact">
+      <a class="back-link" href="{% url 'places:home' %}">&larr; На главную</a>
+      <h1 class="home__title">{{ folder.name }}</h1>
+      <p class="home__subtitle">Записей: {{ places|length }}</p>
+    </header>
+
+    <section class="home__main">
+      <div class="cards">
+        {% for place in places %}
+          {% include "partials/place_card.html" %}
+        {% empty %}
+          <p class="empty">В этой папке пока нет мест.</p>
+        {% endfor %}
+      </div>
+    </section>
+  </main>
+{% endblock %}

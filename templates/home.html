@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Наш Хаб{% endblock %}
+
+{% block content %}
+  <main class="home">
+    <header class="home__hero">
+      <h1 class="home__title">Наш Хаб</h1>
+      <p class="home__subtitle">Места, где мы были</p>
+      <a class="map-button" href="{% url 'places:map' %}">Карта</a>
+    </header>
+
+    <div class="home__layout">
+      <section class="home__main">
+        <h2 class="home__section-title">Недавно добавленные</h2>
+        <div class="cards">
+          {% for place in recent_places %}
+            {% include "partials/place_card.html" %}
+          {% empty %}
+            <p class="empty">Пока нет записей.</p>
+          {% endfor %}
+        </div>
+      </section>
+
+      <aside class="home__sidebar">
+        <h2 class="home__section-title">Папки</h2>
+        <div class="folder-list">
+          {% for folder in folders %}
+            <a class="folder-item" href="{% url 'places:folder_detail' folder.id %}">
+              <span class="folder-item__name">{{ folder.name }}</span>
+              <span class="folder-item__count">{{ folder.place_count }}</span>
+            </a>
+          {% empty %}
+            <p class="empty">Пока нет папок.</p>
+          {% endfor %}
+        </div>
+      </aside>
+    </div>
+  </main>
+{% endblock %}
