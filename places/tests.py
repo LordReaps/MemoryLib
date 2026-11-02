@@ -428,6 +428,77 @@ class PlaceDetailTests(AuthenticatedTestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("login"), response["Location"])
 
+    def _place(self, title, **fields):
+        return Place.objects.create(title=title, latitude=1.0, longitude=1.0, **fields)
+
+    def test_similar_shows_same_folder_first(self):
+        folder = Folder.objects.create(name="Анапа2024")
+        other_folder = Folder.objects.create(name="Сочи")
+        current = self._place("Текущее", folder=folder, start_date="2024-08-01")
+        same_folder = self._place("Из папки", folder=folder)
+        by_date = self._place("По дате", folder=other_folder, start_date="2024-08-03")
+
+        response = self.client.get(
+            reverse("places:place_detail", kwargs={"pk": current.pk})
+        )
+        similar = list(response.context["similar_places"])
+
+        self.assertEqual([place.pk for place in similar], [same_folder.pk, by_date.pk])
+        self.assertContains(response, "Похожие")
+        self.assertContains(response, "Из папки")
+        self.assertContains(response, "По дате")
+
+    def test_similar_uses_date_window_and_distance_order(self):
+        current = self._place("Текущее", start_date="2024-08-01")
+        near = self._place("Рядом", start_date="2024-08-03")
+        middle = self._place("Средне", start_date="2024-07-27")
+        far_ok = self._place("Далеко", start_date="2024-08-11")
+        too_far = self._place("Слишком далеко", start_date="2024-08-20")
+
+        response = self.client.get(
+            reverse("places:place_detail", kwargs={"pk": current.pk})
+        )
+        similar = list(response.context["similar_places"])
+
+        self.assertEqual(
+            [place.pk for place in similar],
+            [near.pk, middle.pk, far_ok.pk],
+        )
+        self.assertNotIn(too_far.pk, [place.pk for place in similar])
+
+    def test_similar_limited_to_four(self):
+        folder = Folder.objects.create(name="Большая")
+        current = self._place("Текущее", folder=folder)
+        for index in range(6):
+            self._place(f"Сосед {index}", folder=folder)
+
+        response = self.client.get(
+            reverse("places:place_detail", kwargs={"pk": current.pk})
+        )
+
+        self.assertEqual(len(response.context["similar_places"]), 4)
+
+    def test_similar_hidden_when_nothing_matches(self):
+        current = self._place("Одинокое")
+        self._place("Без дат", start_date=None)
+
+        response = self.client.get(
+            reverse("places:place_detail", kwargs={"pk": current.pk})
+        )
+
+        self.assertEqual(list(response.context["similar_places"]), [])
+        self.assertNotContains(response, "Похожие")
+
+    def test_similar_excludes_current_place(self):
+        folder = Folder.objects.create(name="Одна")
+        current = self._place("Текущее", folder=folder)
+
+        response = self.client.get(
+            reverse("places:place_detail", kwargs={"pk": current.pk})
+        )
+
+        self.assertNotIn(current.pk, [place.pk for place in response.context["similar_places"]])
+
 
 @override_settings(ENABLE_TG_CONFIRMATION=False)
 class PlaceViewTests(AuthenticatedTestCase):

@@ -1132,6 +1132,11 @@ body {
   object-fit: cover;
 }
 
+.place-page__similar {
+  margin-top: 48px;
+  padding-top: 8px;
+}
+
 .place-card__thumb {
   flex: 0 0 168px;
   aspect-ratio: 4 / 3;

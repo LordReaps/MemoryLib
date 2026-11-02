@@ -35,6 +35,17 @@
         <p class="empty">Фотографий пока нет.</p>
       {% endfor %}
     </div>
+
+    {% if similar_places %}
+      <section class="place-page__similar">
+        <h2 class="home__section-title">Похожие</h2>
+        <div class="cards">
+          {% for place in similar_places %}
+            {% include "partials/place_card.html" %}
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
   </main>
 
   <div id="lightbox" class="lightbox" hidden>

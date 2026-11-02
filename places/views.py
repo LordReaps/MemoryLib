@@ -1,8 +1,9 @@
 import logging
+from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.http import JsonResponse, Http404, FileResponse
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse
@@ -89,11 +90,52 @@ def map_view(request):
     )
 
 
+SIMILAR_LIMIT = 4
+SIMILAR_DAYS = 14
+
+
+def _similar_places(place, limit=SIMILAR_LIMIT, days=SIMILAR_DAYS):
+    others = (
+        Place.objects.select_related("folder")
+        .prefetch_related("photos")
+        .exclude(pk=place.pk)
+    )
+    result = []
+
+    if place.folder_id:
+        result.extend(others.filter(folder_id=place.folder_id).order_by("title")[:limit])
+
+    if len(result) >= limit:
+        return result
+
+    reference = place.start_date or place.end_date
+    if not reference:
+        return result
+
+    window_start = reference - timedelta(days=days)
+    window_end = reference + timedelta(days=days)
+    candidates = others.filter(
+        Q(start_date__range=(window_start, window_end))
+        | Q(end_date__range=(window_start, window_end))
+    ).exclude(pk__in=[similar.pk for similar in result])
+
+    def distance(candidate):
+        candidate_date = candidate.start_date or candidate.end_date
+        return abs((candidate_date - reference).days)
+
+    result.extend(sorted(candidates, key=distance)[: limit - len(result)])
+    return result
+
+
 def place_detail(request, pk):
     place = get_object_or_404(
         Place.objects.select_related("folder").prefetch_related("photos"), pk=pk
     )
-    return render(request, "place.html", {"place": place})
+    return render(
+        request,
+        "place.html",
+        {"place": place, "similar_places": _similar_places(place)},
+    )
 
 
 def folder_detail(request, pk):
