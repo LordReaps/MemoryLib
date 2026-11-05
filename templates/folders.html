@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Наши папки{% endblock %}
+
+{% block content %}
+  <main class="home">
+    <header class="home__hero home__hero--compact">
+      <a class="back-link" href="{% url 'places:home' %}">&larr; На главную</a>
+      <h1 class="home__title">Наши папки</h1>
+      <p class="home__subtitle">Все папки с местами</p>
+    </header>
+
+    <section class="home__section">
+      <div class="folder-cards">
+        {% for card in folder_cards %}
+          {% include "partials/folder_card.html" %}
+        {% endfor %}
+      </div>
+
+      {% if not folder_cards %}
+        <p class="empty">Пока нет папок.</p>
+      {% endif %}
+    </section>
+  </main>
+{% endblock %}

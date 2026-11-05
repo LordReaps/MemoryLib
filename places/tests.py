@@ -178,15 +178,33 @@ class HomePageTests(AuthenticatedTestCase):
         response = self.client.get(reverse("places:home"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Наш Хаб")
+        self.assertContains(response, "Наша история")
+        self.assertContains(response, "Наши папки")
         self.assertContains(response, "Недавно добавленные")
-        self.assertContains(response, "Папки")
         self.assertContains(response, "Карта")
+        self.assertContains(response, "Создать папку")
         self.assertNotContains(response, 'id="map"')
 
     def test_home_requires_auth(self):
         response = Client().get(reverse("places:home"))
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("login"), response["Location"])
+
+    def test_home_stats_counts(self):
+        folder = Folder.objects.create(name="Анапа2024")
+        Place.objects.create(title="Место", latitude=1.0, longitude=1.0, folder=folder)
+        Photo.objects.create(
+            place=Place.objects.get(),
+            image="places/a.jpg",
+            thumbnail="places/b.webp",
+            original_filename="b.jpg",
+        )
+
+        response = self.client.get(reverse("places:home"))
+
+        self.assertEqual(response.context["places_count"], 1)
+        self.assertEqual(response.context["folders_count"], 1)
+        self.assertEqual(response.context["photos_count"], 1)
 
     def test_home_lists_places_and_folders(self):
         folder = Folder.objects.create(name="Анапа2024")
@@ -203,9 +221,9 @@ class HomePageTests(AuthenticatedTestCase):
 
         self.assertContains(response, "Пляж")
         self.assertContains(response, "Анапа2024")
-        self.assertContains(response, f"?place={place.pk}")
         self.assertContains(response, "0 фото")
-        self.assertContains(response, 'class="folder-item__count">1<')
+        self.assertContains(response, 'class="folder-card"')
+        self.assertContains(response, 'folder-card__badge">1<')
         self.assertContains(
             response,
             reverse("places:folder_detail", kwargs={"pk": folder.pk}),
@@ -214,7 +232,35 @@ class HomePageTests(AuthenticatedTestCase):
             response,
             reverse("places:place_detail", kwargs={"pk": place.pk}),
         )
-        self.assertContains(response, "На карту")
+
+    def test_folder_card_uses_first_place_photo(self):
+        folder = Folder.objects.create(name="Обложка")
+        place = Place.objects.create(
+            title="Первое место",
+            latitude=1.0,
+            longitude=1.0,
+            folder=folder,
+        )
+        photo = Photo.objects.create(
+            place=place,
+            image="places/a.jpg",
+            thumbnail="places/b.webp",
+            original_filename="b.jpg",
+        )
+
+        response = self.client.get(reverse("places:home"))
+
+        self.assertContains(
+            response,
+            reverse("places:serve_photo", kwargs={"pk": photo.pk, "file_type": "thumb"}),
+        )
+
+    def test_folder_card_without_places_has_placeholder(self):
+        Folder.objects.create(name="Пустая")
+
+        response = self.client.get(reverse("places:home"))
+
+        self.assertContains(response, "folder-card__cover-empty")
 
     def test_home_shows_first_photo_by_sort_order(self):
         place = Place.objects.create(title="Фото", latitude=1.0, longitude=1.0)
@@ -340,6 +386,32 @@ class FolderDetailTests(AuthenticatedTestCase):
             reverse("places:folder_detail", kwargs={"pk": folder.pk})
         )
 
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
+
+
+class FolderListTests(AuthenticatedTestCase):
+    def test_lists_all_folders(self):
+        first = Folder.objects.create(name="Анапа2024")
+        Folder.objects.create(name="Сочи")
+
+        response = self.client.get(reverse("places:folder_list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Наши папки")
+        self.assertContains(response, "Анапа2024")
+        self.assertContains(response, "Сочи")
+        self.assertContains(
+            response,
+            reverse("places:folder_detail", kwargs={"pk": first.pk}),
+        )
+
+    def test_empty_state(self):
+        response = self.client.get(reverse("places:folder_list"))
+        self.assertContains(response, "Пока нет папок.")
+
+    def test_requires_auth(self):
+        response = Client().get(reverse("places:folder_list"))
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("login"), response["Location"])
 

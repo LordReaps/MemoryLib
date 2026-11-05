@@ -1,32 +1,51 @@
-<div class="place-card">
-  <a class="place-card__link" href="{% url 'places:place_detail' place.pk %}">
-    <div class="place-card__thumb">
-      {% with photo=place.photos.all|first %}
-        {% if photo %}
-          <img src="{% url 'places:serve_photo' photo.pk 'thumb' %}" alt="" loading="lazy" decoding="async">
-        {% else %}
-          <span class="place-card__thumb-empty" aria-hidden="true">📍</span>
-        {% endif %}
-      {% endwith %}
+<a class="place-card" href="{% url 'places:place_detail' place.pk %}">
+  <div class="place-card__cover">
+    {% with photo=place.photos.all|first %}
+      {% if photo %}
+        <img src="{% url 'places:serve_photo' photo.pk 'thumb' %}" alt="" loading="lazy" decoding="async">
+      {% else %}
+        <span class="place-card__cover-empty" aria-hidden="true">📍</span>
+      {% endif %}
+    {% endwith %}
+  </div>
+
+  <div class="place-card__body">
+    <h3 class="place-card__title">{{ place.title }}</h3>
+
+    <div class="place-card__row">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z"></path>
+        <circle cx="12" cy="10" r="2.6"></circle>
+      </svg>
+      <span>{{ place.latitude|floatformat:"3u" }}, {{ place.longitude|floatformat:"3u" }}</span>
     </div>
 
-    <div class="place-card__body">
-      <div class="place-card__top">
-        <h3 class="place-card__title">{{ place.title }}</h3>
-        {% if place.folder %}<span class="chip">{{ place.folder.name }}</span>{% endif %}
+    {% if place.date_range %}
+      <div class="place-card__row">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="5" width="18" height="16" rx="2"></rect>
+          <path d="M8 3v4M16 3v4M3 11h18"></path>
+        </svg>
+        <span>{{ place.date_range }}</span>
       </div>
+    {% endif %}
 
-      {% if place.date_range %}
-        <p class="place-card__dates">{{ place.date_range }}</p>
-      {% endif %}
-
-      {% if place.description %}
-        <p class="place-card__desc">{{ place.description|truncatechars:140 }}</p>
-      {% endif %}
-
-      <p class="place-card__meta">{{ place.photos.count }} фото</p>
+    <div class="place-card__row">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+        <circle cx="8.5" cy="10" r="1.6"></circle>
+        <path d="m5 17 4.5-4.5 3 3L15 12l4 5"></path>
+      </svg>
+      <span>{{ place.photos.count }} фото</span>
     </div>
-  </a>
 
-  <a class="map-button map-button--small" href="{% url 'places:map' %}?place={{ place.id }}">На карту</a>
-</div>
+    {% if place.folder %}
+      <span class="chip chip--folder">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 8a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        </svg>
+        {{ place.folder.name }}
+      </span>
+    {% endif %}
+  </div>
+</a>

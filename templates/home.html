@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}Наш Хаб{% endblock %}
 
@@ -10,31 +11,100 @@
       <a class="map-button" href="{% url 'places:map' %}">Карта</a>
     </header>
 
-    <div class="home__layout">
-      <section class="home__main">
-        <h2 class="home__section-title">Недавно добавленные</h2>
-        <div class="cards">
-          {% for place in recent_places %}
-            {% include "partials/place_card.html" %}
-          {% empty %}
-            <p class="empty">Пока нет записей.</p>
-          {% endfor %}
-        </div>
-      </section>
+    <section class="stats-card">
+      <div class="stats-card__head">
+        <h2 class="stats-card__title">Наша история</h2>
+        <span class="stats-card__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="5" width="18" height="16" rx="2"></rect>
+            <path d="M8 3v4M16 3v4M3 11h18"></path>
+          </svg>
+        </span>
+      </div>
 
-      <aside class="home__sidebar">
-        <h2 class="home__section-title">Папки</h2>
-        <div class="folder-list">
-          {% for folder in folders %}
-            <a class="folder-item" href="{% url 'places:folder_detail' folder.id %}">
-              <span class="folder-item__name">{{ folder.name }}</span>
-              <span class="folder-item__count">{{ folder.place_count }}</span>
-            </a>
-          {% empty %}
-            <p class="empty">Пока нет папок.</p>
-          {% endfor %}
+      <div class="stats-grid">
+        <div class="stat">
+          <span class="stat__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z"></path>
+              <circle cx="12" cy="10" r="2.6"></circle>
+            </svg>
+          </span>
+          <span class="stat__value">{{ places_count }}</span>
+          <span class="stat__label">мест</span>
         </div>
-      </aside>
-    </div>
+
+        <div class="stat">
+          <span class="stat__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 8a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            </svg>
+          </span>
+          <span class="stat__value">{{ folders_count }}</span>
+          <span class="stat__label">папок</span>
+        </div>
+
+        <div class="stat">
+          <span class="stat__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+              <circle cx="8.5" cy="10" r="1.6"></circle>
+              <path d="m5 17 4.5-4.5 3 3L15 12l4 5"></path>
+            </svg>
+          </span>
+          <span class="stat__value">{{ photos_count }}</span>
+          <span class="stat__label">фото</span>
+        </div>
+
+        <div class="stat">
+          <span class="stat__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 20s-7-4.3-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.7-7 9-7 9z"></path>
+            </svg>
+          </span>
+          <span class="stat__value">&infin;</span>
+          <span class="stat__label">воспоминаний</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="home__section">
+      <div class="home__section-head">
+        <h2 class="home__section-title">Наши папки</h2>
+        <a class="home__link" href="{% url 'places:folder_list' %}">Все папки &rarr;</a>
+      </div>
+
+      <div class="folder-cards">
+        {% for card in folder_cards %}
+          {% include "partials/folder_card.html" %}
+        {% endfor %}
+
+        <button type="button" class="folder-card folder-card--create" id="create-folder-btn">
+          <span class="folder-card__plus" aria-hidden="true">+</span>
+          <span class="folder-card__name">Создать папку</span>
+        </button>
+      </div>
+
+      {% if not folder_cards %}
+        <p class="empty">Пока нет папок.</p>
+      {% endif %}
+    </section>
+
+    <section class="home__section">
+      <h2 class="home__section-title">Недавно добавленные</h2>
+      <div class="cards">
+        {% for place in recent_places %}
+          {% include "partials/place_card.html" %}
+        {% empty %}
+          <p class="empty">Пока нет записей.</p>
+        {% endfor %}
+      </div>
+    </section>
   </main>
+{% endblock %}
+
+{% block scripts %}
+  {{ create_folder_url|json_script:"create-folder-url" }}
+  {{ folder_url_template|json_script:"folder-url-template" }}
+  <script src="{% static 'js/home-folders.js' %}?v=1"></script>
 {% endblock %}

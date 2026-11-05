@@ -3,7 +3,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 from django.http import JsonResponse, Http404, FileResponse
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse
@@ -58,16 +58,47 @@ def _save_failed(message, status=400):
 RECENT_LIMIT = 10
 
 
+def _folder_cards():
+    """Папки с количеством мест и обложкой — первым фото первой записи."""
+    folders = (
+        Folder.objects.annotate(place_count=Count("places"))
+        .order_by("name")
+        .prefetch_related(
+            Prefetch(
+                "places",
+                queryset=Place.objects.order_by("created_at").prefetch_related("photos"),
+            )
+        )
+    )
+
+    cards = []
+    for folder in folders:
+        first_place = next(iter(folder.places.all()), None)
+        photo = first_place.photos.all().first() if first_place else None
+        cards.append({"folder": folder, "photo": photo})
+    return cards
+
+
 def home_view(request):
     places = Place.objects.select_related("folder").prefetch_related("photos")
+    folder_cards = _folder_cards()
     return render(
         request,
         "home.html",
         {
             "recent_places": places.order_by("-created_at")[:RECENT_LIMIT],
-            "folders": Folder.objects.annotate(place_count=Count("places")).order_by("name"),
+            "folder_cards": folder_cards,
+            "places_count": Place.objects.count(),
+            "folders_count": len(folder_cards),
+            "photos_count": Photo.objects.count(),
+            "create_folder_url": reverse("places:folder_create"),
+            "folder_url_template": _place_url_template("folder_detail"),
         },
     )
+
+
+def folder_list(request):
+    return render(request, "folders.html", {"folder_cards": _folder_cards()})
 
 
 def map_view(request):

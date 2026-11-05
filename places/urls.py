@@ -7,6 +7,7 @@ app_name = "places"
 urlpatterns = [
     path("", views.home_view, name="home"),
     path("map/", views.map_view, name="map"),
+    path("folders/", views.folder_list, name="folder_list"),
     path("folders/create/", views.folder_create, name="folder_create"),
     path("folders/<int:pk>/", views.folder_detail, name="folder_detail"),
     path("places/create/", views.place_create, name="place_create"),

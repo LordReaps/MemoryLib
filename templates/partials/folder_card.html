@@ -1,6 +1,21 @@
-<div class="folder-card">
-  <div class="folder-card__body">
-    <h3 class="folder-card__title">{{ folder.name }}</h3>
-    <p class="folder-card__meta">Записей: {{ folder.place_count }}</p>
-  </div>
-</div>
+<a class="folder-card" href="{% url 'places:folder_detail' card.folder.id %}">
+  <span class="folder-card__cover">
+    {% if card.photo %}
+      <img src="{% url 'places:serve_photo' card.photo.pk 'thumb' %}" alt="" loading="lazy" decoding="async">
+    {% else %}
+      <span class="folder-card__cover-empty" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 8a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        </svg>
+      </span>
+    {% endif %}
+    <span class="folder-card__badge">{{ card.folder.place_count }}</span>
+  </span>
+
+  <span class="folder-card__footer">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 8a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+    </svg>
+    <span class="folder-card__name">{{ card.folder.name }}</span>
+  </span>
+</a>
