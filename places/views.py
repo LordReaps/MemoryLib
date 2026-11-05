@@ -180,6 +180,13 @@ def folder_detail(request, pk):
 
 
 @require_POST
+def folder_delete(request, pk):
+    folder = get_object_or_404(Folder, pk=pk)
+    folder.delete()
+    return redirect("places:home")
+
+
+@require_POST
 def folder_create(request):
     name = (request.POST.get("name") or "").strip()
     if not name or len(name) > 120:

@@ -10,6 +10,13 @@
       <p class="home__subtitle">Записей: {{ places|length }}</p>
     </header>
 
+    <div class="folder-actions">
+      <form method="post" action="{% url 'places:folder_delete' folder.pk %}" onsubmit="return confirm('Удалить папку? Места останутся, но без папки.');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn--danger">Удалить папку</button>
+      </form>
+    </div>
+
     <section class="home__main">
       <div class="cards">
         {% for place in places %}

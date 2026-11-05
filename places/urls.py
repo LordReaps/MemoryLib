@@ -10,6 +10,7 @@ urlpatterns = [
     path("folders/", views.folder_list, name="folder_list"),
     path("folders/create/", views.folder_create, name="folder_create"),
     path("folders/<int:pk>/", views.folder_detail, name="folder_detail"),
+    path("folders/<int:pk>/delete/", views.folder_delete, name="folder_delete"),
     path("places/create/", views.place_create, name="place_create"),
     path("places/<int:pk>/", views.place_detail, name="place_detail"),
     path("places/<int:pk>/update/", views.place_update, name="place_update"),

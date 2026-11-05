@@ -363,6 +363,10 @@ class FolderDetailTests(AuthenticatedTestCase):
         self.assertContains(response, "Пляж")
         self.assertNotContains(response, "Горы")
         self.assertContains(response, "Записей: 1")
+        self.assertContains(
+            response,
+            reverse("places:folder_delete", kwargs={"pk": folder.pk}),
+        )
 
     def test_empty_folder_message(self):
         folder = Folder.objects.create(name="Пустая")
@@ -388,6 +392,53 @@ class FolderDetailTests(AuthenticatedTestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("login"), response["Location"])
+
+
+class FolderDeleteTests(AuthenticatedTestCase):
+    def test_delete_keeps_places_without_folder(self):
+        folder = Folder.objects.create(name="Анапа2024")
+        place = Place.objects.create(
+            title="Пляж",
+            latitude=1.0,
+            longitude=1.0,
+            folder=folder,
+        )
+
+        response = self.client.post(
+            reverse("places:folder_delete", kwargs={"pk": folder.pk})
+        )
+
+        self.assertRedirects(response, reverse("places:home"))
+        self.assertFalse(Folder.objects.filter(pk=folder.pk).exists())
+        place.refresh_from_db()
+        self.assertIsNone(place.folder_id)
+        self.assertTrue(Place.objects.filter(pk=place.pk).exists())
+
+    def test_get_not_allowed(self):
+        folder = Folder.objects.create(name="Тест")
+
+        response = self.client.get(
+            reverse("places:folder_delete", kwargs={"pk": folder.pk})
+        )
+
+        self.assertEqual(response.status_code, 405)
+        self.assertTrue(Folder.objects.filter(pk=folder.pk).exists())
+
+    def test_requires_auth(self):
+        folder = Folder.objects.create(name="Тест")
+
+        response = Client().post(
+            reverse("places:folder_delete", kwargs={"pk": folder.pk})
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Folder.objects.filter(pk=folder.pk).exists())
+
+    def test_missing_folder_returns_404(self):
+        response = self.client.post(
+            reverse("places:folder_delete", kwargs={"pk": 999999})
+        )
+        self.assertEqual(response.status_code, 404)
 
 
 class FolderListTests(AuthenticatedTestCase):

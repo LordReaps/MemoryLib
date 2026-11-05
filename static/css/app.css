@@ -1178,6 +1178,20 @@ body {
   text-decoration: underline;
 }
 
+.folder-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 20px;
+}
+
+.folder-actions form {
+  margin: 0;
+}
+
+.folder-actions .btn {
+  border: 1px solid #f3cfd9;
+}
+
 .place-card {
   box-sizing: border-box;
   display: flex;
